@@ -1,0 +1,75 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+*.so
+*.dylib
+*.dll
+*.nbc
+*.nbi
+
+# Packaging
+*.egg
+*.egg-info/
+*.egg-info
+*.dist-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+*.whl
+share/python-wheels/
+__pypackages__/
+.installed.cfg
+pip-log.txt
+pip-delete-this-directory.txt
+*.manifest
+*.spec
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.python-version
+.env
+.env.*
+
+# Tests and coverage
+.pytest_cache/
+.cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+nosetests.xml
+*.cover
+*.py,cover
+
+# Type checking and linting
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.pyre/
+
+# Docs build output
+docs/_build/
+docs/**/_build/
+
+# Editor/OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Regression test data (downloaded)
+tests/data/ligand_regression_feats.pkl
