@@ -62,6 +62,18 @@ features = design.to_features()
 print(sorted(features.keys())[:6])
 ```
 
+Small molecule properties:
+
+```python
+from refua import SM
+
+props = SM("CCO", lazy=True)
+print(props.mol_wt(), props.logp())
+print(props.to_dict())
+```
+
+Pass `lazy=False` to compute all properties eagerly.
+
 BoltzGen defaults to the bundled molecule library in the Hugging Face cache. Set `BOLTZGEN_MOLDIR` or pass `mol_dir` to override.
 
 CLI entrypoints are still available:
