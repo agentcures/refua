@@ -1,4 +1,4 @@
-"""KRAS G12D + MRTX-1133 folding example using the Boltz2 API."""
+"""KRAS G12D + MRTX-1133 folding example using the unified API."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import argparse
 import os
 from pathlib import Path
 
-from refua import Boltz2, download_assets
+from refua import Complex, Protein, SM, download_assets
 from refua.boltz.data.mol import load_canonicals, load_molecules
 
 
@@ -27,7 +27,7 @@ def _resolve_cache_dir(path: Path | None = None) -> Path:
     return Path(os.environ.get("BOLTZ_CACHE", "~/.boltz")).expanduser()
 
 
-def _load_components(cache_dir: Path) -> dict[str, object]:
+def _load_ligand(cache_dir: Path):
     mol_dir = cache_dir / "mols"
     if not mol_dir.exists():
         download_assets(
@@ -37,17 +37,17 @@ def _load_components(cache_dir: Path) -> dict[str, object]:
         )
     components = load_canonicals(str(mol_dir))
     components.update(load_molecules(str(mol_dir), [MRTX_1133_CCD]))
-    return components
+    return SM(components[MRTX_1133_CCD])
 
 
-def build_complex(model: Boltz2, args: argparse.Namespace):
+def build_complex(args: argparse.Namespace, ligand):
     """Create a KRAS/MRTX-1133 complex and request affinity."""
-    return (
-        model.fold_complex(args.name)
-        .protein(args.protein_id, KRAS_G12D_SEQUENCE)
-        .ligand(args.ligand_id, ccd=MRTX_1133_CCD)
-        .request_affinity(args.ligand_id)
+    complex_spec = Complex(
+        [Protein(KRAS_G12D_SEQUENCE, ids=args.protein_id), ligand],
+        name=args.name,
     )
+    complex_spec.request_affinity(ligand)
+    return complex_spec
 
 
 def _infer_format(path: Path, explicit_format: str | None) -> str:
@@ -68,7 +68,6 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--protein-id", default="A", help="Protein chain id.")
-    parser.add_argument("--ligand-id", default="L", help="Ligand chain id.")
     parser.add_argument(
         "--name",
         default="kras_g12d_mrtx1133",
@@ -93,27 +92,28 @@ def main() -> None:
     """Run the example, print affinity, and optionally save the structure."""
     args = parse_args()
     cache_dir = _resolve_cache_dir()
-    components = _load_components(cache_dir)
-    model = Boltz2(
-        cache_dir=cache_dir,
-        components=components,
-        molecules=components,
-        use_kernels=False,
-    )
-    complex_spec = build_complex(model, args)
-    affinity = complex_spec.get_affinity()
+    ligand = _load_ligand(cache_dir)
+    complex_spec = build_complex(args, ligand)
+    if args.output:
+        result = complex_spec.fold()
+        affinity = result.affinity
+    else:
+        affinity = complex_spec.affinity(ligand)
 
     print("Affinity prediction (KRAS G12D + MRTX-1133):")
-    print(f"- ic50: {affinity.ic50}")
-    print(f"- binding_probability: {affinity.binding_probability}")
+    if affinity is not None:
+        print(f"- ic50: {affinity.ic50}")
+        print(f"- binding_probability: {affinity.binding_probability}")
+    else:
+        print("- affinity: None")
 
     if args.output:
         output_path = args.output.expanduser()
         output_format = _infer_format(output_path, args.format)
         if output_format == "bcif":
-            output_path.write_bytes(complex_spec.to_bcif())
+            output_path.write_bytes(result.to_bcif())
         else:
-            output_path.write_text(complex_spec.to_mmcif(), encoding="utf-8")
+            output_path.write_text(result.to_mmcif(), encoding="utf-8")
         print(f"Saved structure: {output_path} ({output_format})")
 
 

@@ -26,41 +26,28 @@ Install with NVIDIA GPU support:
 pip install "refua[cuda]"
 ```
 
-Boltz-2 API:
+Unified API (same Complex flow for ligands or binders):
 
 ```python
 from pathlib import Path
 
-from refua import Boltz2
+from refua import Binder, Complex, Protein, SM
 
-model = Boltz2()
+target = Protein("MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ", ids="A")
 
-complex_spec = (
-    model.fold_complex()
-    .protein("A", "MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ")
-    .ligand("L", "CCO")
-)
+# Protein + ligand -> Boltz2 structure + affinity
+result = Complex([target, SM("CCO")], name="demo").request_affinity().fold()
+Path("complex.bcif").write_bytes(result.to_bcif())
+print(result.affinity.ic50, result.affinity.binding_probability)
 
-Path("complex.bcif").write_bytes(complex_spec.to_bcif())
-affinity = complex_spec.get_affinity()
-print(affinity.ic50, affinity.binding_probability)
+# Protein + binder placeholder -> Boltz2 structure + BoltzGen design inputs
+binder = Binder(length=12, ids="P")
+result = Complex([target, binder], name="design").fold()
+Path("design.bcif").write_bytes(result.to_bcif())
+print("binder spec:", binder.sequence)
 ```
 
-BoltzGen API:
-
-```python
-from refua import BoltzGen
-
-gen = BoltzGen()
-design = (
-    gen.design("simple_design")
-    .protein("A", "12")
-    .total_length(8, 20)
-)
-
-features = design.to_features()
-print(sorted(features.keys())[:6])
-```
+For template-based designs, add `.file(...)` to the same `Complex` before `fold()`.
 
 Small molecule properties:
 
@@ -91,11 +78,11 @@ boltzgen --help
 
 ## Examples
 
-- `examples/antibody_design.py` shows a minimal BoltzGen antibody design spec.
-- `examples/protein_ligand_affinity.py` shows a Boltz protein-ligand affinity spec.
+- `examples/antibody_design.py` shows a minimal antibody design spec with template targets.
+- `examples/protein_ligand_affinity.py` shows a protein-ligand affinity spec.
 - `examples/boltz2_kras_mrtx1133.py` folds KRAS G12D with the MRTX-1133 inhibitor and prints affinity.
-- `examples/boltzgen_peptide_binder.py` shows a BoltzGen peptide binder spec with optional cyclic peptides.
-- `examples/boltz_constraints.py` shows a Boltz complex with pocket/contact constraints and an optional MSA.
+- `examples/boltzgen_peptide_binder.py` shows a peptide binder spec with optional cyclic peptides.
+- `examples/boltz_constraints.py` shows a complex with pocket/contact constraints and an optional MSA.
 - `examples/boltz_multichain_msa.py` shows multi-chain MSAs with cross-chain constraints.
 - `examples/boltzgen_template_insertions.py` shows template structure groups and design insertions.
 - `examples/boltz_multi_pocket_complex.py` shows multi-ligand pocket constraints with contacts.

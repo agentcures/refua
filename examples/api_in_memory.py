@@ -1,15 +1,17 @@
-from refua import Boltz2
+from refua import Complex, Protein, SM
 
 
 def main() -> None:
-    model = Boltz2()
-    complex_spec = (
-        model.fold_complex("simple_complex")
-        .protein("A", "MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ")
-        .ligand("L", "CCO")
+    complex_spec = Complex(
+        [
+            Protein("MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ", ids="A"),
+            SM("CCO"),
+        ],
+        name="simple_complex",
     )
 
-    bcif_bytes = complex_spec.to_bcif()
+    result = complex_spec.fold()
+    bcif_bytes = result.to_bcif()
     print("BCIF bytes:", len(bcif_bytes))
 
 

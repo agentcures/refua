@@ -1,17 +1,17 @@
 # Refua Examples
 
-These examples use the high-level fluent APIs (`Boltz2` and `BoltzGen`) to build
-specs, run predictions, and prepare model inputs. They are intentionally minimal
-so you can adapt them to your own data.
+These examples use the unified `Complex` API with `Protein`, `Binder`, and `SM` to
+build specs, run predictions, and prepare model inputs. The unified API routes to
+Boltz2 or BoltzGen under the hood, depending on which entities you include.
 
-Boltz2 downloads checkpoints and CCDs into the default cache on first run. BoltzGen
-uses the bundled molecule library from the Hugging Face cache; set `BOLTZGEN_MOLDIR`
-to override.
+Boltz2 assets download into the default cache on first run. BoltzGen uses the
+bundled molecule library from the Hugging Face cache; set `BOLTZGEN_MOLDIR` to
+override.
 
-## Antibody design (BoltzGen)
+## Antibody design (Complex -> BoltzGen)
 
-`antibody_design.py` shows how to build a simple antibody specification against a target structure
-and prepare BoltzGen model inputs.
+`antibody_design.py` builds a simple antibody specification against a target structure
+and prepares design inputs.
 
 Example:
 
@@ -22,9 +22,9 @@ python examples/antibody_design.py \
   --binding-range 10..40
 ```
 
-## Peptide binder design (BoltzGen)
+## Peptide binder design (Complex -> BoltzGen)
 
-`boltzgen_peptide_binder.py` shows a peptide binder spec against a target structure with optional
+`boltzgen_peptide_binder.py` builds a peptide binder spec against a target structure with optional
 cyclic peptides and secondary structure hints.
 
 Example:
@@ -38,9 +38,9 @@ python examples/boltzgen_peptide_binder.py \
   --peptide-cyclic
 ```
 
-## Protein-ligand complex with affinity (Boltz)
+## Protein-ligand complex with affinity (Complex -> Boltz2)
 
-`protein_ligand_affinity.py` shows how to create a protein-ligand complex and run a Boltz2
+`protein_ligand_affinity.py` shows how to create a protein-ligand complex and run an
 affinity prediction.
 
 Example:
@@ -51,7 +51,7 @@ python examples/protein_ligand_affinity.py \
   --ligand-smiles CCO
 ```
 
-## KRAS G12D + MRTX-1133 (Boltz)
+## KRAS G12D + MRTX-1133 (Complex -> Boltz2)
 
 `boltz2_kras_mrtx1133.py` folds the KRAS G12D protein with the MRTX-1133 inhibitor, prints the
 affinity prediction, and optionally writes a CIF/BCIF.
@@ -62,10 +62,10 @@ Example:
 python examples/boltz2_kras_mrtx1133.py --output kras_mrtx1133.bcif
 ```
 
-## Constrained protein-ligand complex (Boltz)
+## Constrained protein-ligand complex (Complex -> Boltz2)
 
 `boltz_constraints.py` builds a protein-ligand complex with pocket/contact constraints and an optional
-toy MSA, then runs Boltz2 structure prediction (and optional affinity).
+toy MSA, then runs structure prediction (and optional affinity).
 
 Example:
 
@@ -79,7 +79,7 @@ python examples/boltz_constraints.py \
   --use-msa
 ```
 
-## Multi-chain MSA + constraints (Boltz)
+## Multi-chain MSA + constraints (Complex -> Boltz2)
 
 `boltz_multichain_msa.py` builds a multi-chain complex, attaches in-memory MSAs to each chain, and
 adds pocket/contact constraints across chains before prediction.
@@ -96,7 +96,7 @@ python examples/boltz_multichain_msa.py \
   --affinity
 ```
 
-## Template insertions + structure groups (BoltzGen)
+## Template insertions + structure groups (Complex -> BoltzGen)
 
 `boltzgen_template_insertions.py` uses a template structure and shows structure groups, design
 insertions, and a small binder spec.
@@ -114,7 +114,7 @@ python examples/boltzgen_template_insertions.py \
   --binder-spec 10C6C3
 ```
 
-## Multi-ligand pockets (Boltz)
+## Multi-ligand pockets (Complex -> Boltz2)
 
 `boltz_multi_pocket_complex.py` shows two ligands with independent pocket constraints plus optional
 cross-chain contact constraints.
@@ -130,7 +130,7 @@ python examples/boltz_multi_pocket_complex.py \
   --contact A:10,B:10
 ```
 
-## Template masks + structure groups (BoltzGen)
+## Template masks + structure groups (Complex -> BoltzGen)
 
 `boltzgen_template_masks.py` mixes include/exclude masks, design/not-design ranges, structure groups,
 and secondary-structure conditioning on a template chain.

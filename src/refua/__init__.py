@@ -9,6 +9,7 @@ from refua.chem import (
     available_mol_property_groups,
     register_mol_property,
 )
+from refua.unified import Binder, Complex, DNA, Protein, RNA
 from refua.boltz.api import Boltz2
 from refua.boltzgen.api import BoltzGen
 
@@ -21,7 +22,12 @@ except PackageNotFoundError:
 __all__ = [
     "Boltz2",
     "BoltzGen",
+    "Binder",
+    "Complex",
+    "DNA",
     "MolProperties",
+    "Protein",
+    "RNA",
     "SM",
     "SmallMolecule",
     "available_mol_properties",

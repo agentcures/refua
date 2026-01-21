@@ -1,10 +1,10 @@
-"""Official demo-style protein-ligand pair using the Boltz2 API."""
+"""Official demo-style protein-ligand pair using the unified API."""
 
 from __future__ import annotations
 
 import argparse
 
-from refua import Boltz2
+from refua import Complex, Protein, SM
 
 
 PROTEIN_NAME = "P11229"
@@ -20,27 +20,26 @@ PROTEIN_SEQUENCE = (
 LIGAND_SMILES = "C#CCN1CCC[C@@H]1COC(=O)c1cnn(CC)c1"
 
 
-def build_complex(model: Boltz2, args: argparse.Namespace):
-    """Create the demo complex and request affinity."""
-    return (
-        model.fold_complex(args.name)
-        .protein(args.protein_id, args.protein_sequence)
-        .ligand(args.ligand_id, args.ligand_smiles)
-        .request_affinity(args.ligand_id)
+def build_complex(args: argparse.Namespace):
+    """Create the demo complex and return the ligand handle."""
+    ligand = SM(args.ligand_smiles)
+    complex_spec = Complex(
+        [Protein(args.protein_sequence, ids=args.protein_id), ligand],
+        name=args.name,
     )
+    return complex_spec, ligand
 
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for the example."""
     parser = argparse.ArgumentParser(
         description=(
-            f"Run the official demo-style Boltz2 {PROTEIN_NAME} "
+            f"Run the official demo-style {PROTEIN_NAME} "
             f"and {LIGAND_NAME} example."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--protein-id", default="A", help="Protein chain id.")
-    parser.add_argument("--ligand-id", default="B", help="Ligand chain id.")
     parser.add_argument(
         "--protein-sequence",
         default=PROTEIN_SEQUENCE,
@@ -56,20 +55,14 @@ def parse_args() -> argparse.Namespace:
         default="official_demo_pair",
         help="Spec name for the prediction.",
     )
-    parser.add_argument(
-        "--use-kernels",
-        action="store_true",
-        help="Enable cuEquivariance kernels if available.",
-    )
     return parser.parse_args()
 
 
 def main() -> None:
     """Run the example and print a brief affinity summary."""
     args = parse_args()
-    model = Boltz2(use_kernels=args.use_kernels)
-    complex_spec = build_complex(model, args)
-    affinity = complex_spec.get_affinity()
+    complex_spec, ligand = build_complex(args)
+    affinity = complex_spec.affinity(ligand)
 
     print(f"Affinity prediction ({PROTEIN_NAME}-{LIGAND_NAME}):")
     print(f"- ic50: {affinity.ic50}")

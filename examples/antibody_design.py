@@ -1,4 +1,4 @@
-"""Minimal antibody design example using the simple BoltzGen API."""
+"""Minimal antibody design example using the unified API."""
 
 from __future__ import annotations
 
@@ -6,13 +6,13 @@ import argparse
 from pathlib import Path
 from typing import Optional
 
-from refua import BoltzGen
+from refua import Binder, Complex
 
 
 def _resolve_sequence(explicit: Optional[str], length: int, label: str) -> str:
     """Return an explicit sequence or a numeric design token string.
 
-    In BoltzGen schemas, numeric tokens (e.g., "120") denote designed residues.
+    Numeric tokens (e.g., "120") denote designed residues.
     """
     if explicit:
         return explicit
@@ -22,10 +22,10 @@ def _resolve_sequence(explicit: Optional[str], length: int, label: str) -> str:
     return str(length)
 
 
-def build_design(gen: BoltzGen, args: argparse.Namespace):
-    """Create a BoltzGen design for a simple antibody/antigen setup."""
+def build_design(args: argparse.Namespace):
+    """Create a design for a simple antibody/antigen setup."""
     antigen_path = Path(args.antigen).expanduser().resolve()
-    design = gen.design(args.name, base_dir=antigen_path.parent).file(
+    design = Complex(name=args.name, base_dir=antigen_path.parent).file(
         antigen_path,
         include=[{"chain": {"id": args.antigen_chain}}],
         binding_types=(
@@ -38,14 +38,17 @@ def build_design(gen: BoltzGen, args: argparse.Namespace):
     heavy_seq = _resolve_sequence(args.heavy_seq, args.heavy_length, "Heavy chain")
     light_seq = _resolve_sequence(args.light_seq, args.light_length, "Light chain")
 
-    design.protein(args.heavy_id, heavy_seq).protein(args.light_id, light_seq)
+    design.add(
+        Binder(heavy_seq, ids=args.heavy_id),
+        Binder(light_seq, ids=args.light_id),
+    )
     return design
 
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for the example."""
     parser = argparse.ArgumentParser(
-        description="Prepare BoltzGen model inputs for a minimal antibody design spec.",
+        description="Prepare antibody design inputs with the unified API.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -98,12 +101,15 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """Run the example and print a brief feature summary."""
     args = parse_args()
-    gen = BoltzGen()
-    design = build_design(gen, args)
-    features = design.to_features()
+    design = build_design(args)
+    result = design.fold()
+    features = result.features
 
     print("Prepared antibody design inputs:")
-    print(f"- feature_keys: {sorted(features.keys())}")
+    if features is not None:
+        print(f"- feature_keys: {sorted(features.keys())}")
+    else:
+        print("- features: None")
 
 
 if __name__ == "__main__":

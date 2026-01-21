@@ -1,4 +1,4 @@
-"""Template-driven design with masks and structure groups using BoltzGen."""
+"""Template-driven design with masks and structure groups using the unified API."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 from typing import Optional
 
-from refua import BoltzGen
+from refua import Binder, Complex
 
 
 def _structure_groups(chain_id: str, primary: str, secondary: str, masked: str) -> Optional[list[dict]]:
@@ -41,8 +41,8 @@ def _secondary_structure(chain_id: str, helix: str, sheet: str, loop: str) -> Op
     return [{"chain": spec}]
 
 
-def build_design(gen: BoltzGen, args: argparse.Namespace):
-    """Create a BoltzGen design with template masks and structure groups."""
+def build_design(args: argparse.Namespace):
+    """Create a design with template masks and structure groups."""
     template_path = Path(args.template).expanduser().resolve()
 
     file_kwargs = {
@@ -86,7 +86,7 @@ def build_design(gen: BoltzGen, args: argparse.Namespace):
             {"chain": {"id": args.template_chain, "binding": args.binding_range}}
         ]
 
-    design = gen.design(args.name, base_dir=template_path.parent).file(
+    design = Complex(name=args.name, base_dir=template_path.parent).file(
         template_path, **file_kwargs
     )
 
@@ -94,11 +94,13 @@ def build_design(gen: BoltzGen, args: argparse.Namespace):
         binder_kwargs = {}
         if args.binder_ss.strip():
             binder_kwargs["secondary_structure"] = args.binder_ss
-        design.protein(
-            args.binder_chain,
-            args.binder_spec,
-            cyclic=args.binder_cyclic,
-            **binder_kwargs,
+        design.add(
+            Binder(
+                args.binder_spec,
+                ids=args.binder_chain,
+                cyclic=args.binder_cyclic,
+                **binder_kwargs,
+            )
         )
 
     return design
@@ -107,7 +109,7 @@ def build_design(gen: BoltzGen, args: argparse.Namespace):
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for the example."""
     parser = argparse.ArgumentParser(
-        description="Prepare BoltzGen model inputs with template design masks.",
+        description="Prepare template mask inputs with the unified API.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -202,9 +204,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """Run the example and print a brief feature summary."""
     args = parse_args()
-    gen = BoltzGen()
-    design = build_design(gen, args)
-    features = design.to_features()
+    design = build_design(args)
+    result = design.fold()
+    features = result.features
 
     print("Prepared template mask inputs:")
     print(f"- feature_keys: {sorted(features.keys())}")
