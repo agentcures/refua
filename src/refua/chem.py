@@ -276,6 +276,11 @@ class MolProperties:
         """Return whether this builder computes lazily."""
         return self._lazy
 
+    @property
+    def mol(self) -> Mol:
+        """Return the underlying RDKit Mol."""
+        return self._mol
+
     def get(self, name: str) -> PropertyValue:
         """Retrieve a computed property value."""
         normalized = _normalize_name(name)

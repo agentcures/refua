@@ -1,26 +1,26 @@
-"""Protein-ligand affinity example using the simple Boltz2 API."""
+"""Protein-ligand affinity example using the unified API."""
 
 from __future__ import annotations
 
 import argparse
 
-from refua import Boltz2
+from refua import Complex, Protein, SM
 
 
-def build_complex(model: Boltz2, args: argparse.Namespace):
+def build_complex(args: argparse.Namespace):
     """Create a protein-ligand complex for affinity prediction."""
-    return (
-        model.fold_complex(args.name)
-        .protein(args.protein_id, args.protein_sequence)
-        .ligand(args.ligand_id, args.ligand_smiles)
-        .request_affinity(args.ligand_id)
+    ligand = SM(args.ligand_smiles)
+    complex_spec = Complex(
+        [Protein(args.protein_sequence, ids=args.protein_id), ligand],
+        name=args.name,
     )
+    return complex_spec, ligand
 
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for the example."""
     parser = argparse.ArgumentParser(
-        description="Run a Boltz2 protein-ligand affinity prediction.",
+        description="Run a protein-ligand affinity prediction.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -31,7 +31,6 @@ def parse_args() -> argparse.Namespace:
         default="MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ",
         help="Protein sequence (single-letter amino acids).",
     )
-    parser.add_argument("--ligand-id", default="L", help="Ligand chain id.")
     parser.add_argument(
         "--ligand-smiles",
         default="CCO",
@@ -48,9 +47,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """Run the example and print a brief affinity summary."""
     args = parse_args()
-    model = Boltz2()
-    complex_spec = build_complex(model, args)
-    affinity = complex_spec.get_affinity()
+    complex_spec, ligand = build_complex(args)
+    affinity = complex_spec.affinity(ligand)
 
     print("Protein-ligand affinity:")
     print(f"- ic50: {affinity.ic50}")

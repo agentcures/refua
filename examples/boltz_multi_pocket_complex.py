@@ -1,11 +1,11 @@
-"""Multi-ligand complex with pocket and contact constraints using Boltz2."""
+"""Multi-ligand complex with pocket and contact constraints using the unified API."""
 
 from __future__ import annotations
 
 import argparse
 from typing import Tuple, Union
 
-from refua import Boltz2
+from refua import Complex, Protein, SM
 from refua.boltz.api import msa_from_a3m
 
 TokenRef = Tuple[str, Union[int, str]]
@@ -61,8 +61,8 @@ def _attach_msa(sequence: str) -> object:
     return msa_from_a3m(_simple_a3m(sequence))
 
 
-def build_complex(model: Boltz2, args: argparse.Namespace):
-    """Create a Boltz2 complex with multiple ligands and constraints."""
+def build_complex(args: argparse.Namespace):
+    """Create a complex with multiple ligands and constraints."""
     msa_a = None
     msa_b = None
     if args.use_msa:
@@ -72,28 +72,30 @@ def build_complex(model: Boltz2, args: argparse.Namespace):
         else:
             msa_b = _attach_msa(args.sequence_b)
 
-    complex_spec = model.fold_complex(args.name).protein(
-        args.chain_a, args.sequence_a, msa=msa_a
+    complex_spec = Complex(name=args.name).add(
+        Protein(args.sequence_a, ids=args.chain_a, msa=msa_a)
     )
-    complex_spec.protein(args.chain_b, args.sequence_b, msa=msa_b)
+    complex_spec.add(Protein(args.sequence_b, ids=args.chain_b, msa=msa_b))
 
     if args.sequence_c:
         msa_c = _attach_msa(args.sequence_c) if args.use_msa else None
-        complex_spec.protein(args.chain_c, args.sequence_c, msa=msa_c)
+        complex_spec.add(Protein(args.sequence_c, ids=args.chain_c, msa=msa_c))
 
-    complex_spec.ligand(args.ligand_1_id, args.ligand_1_smiles)
+    ligand_1 = SM(args.ligand_1_smiles)
+    complex_spec.add(ligand_1)
     complex_spec.pocket(
-        args.ligand_1_id,
+        ligand_1,
         contacts=_parse_token_refs(args.ligand_1_contacts),
         max_distance=args.pocket_distance,
         force=args.pocket_force,
     )
 
     if args.ligand_2_smiles:
-        complex_spec.ligand(args.ligand_2_id, args.ligand_2_smiles)
+        ligand_2 = SM(args.ligand_2_smiles)
+        complex_spec.add(ligand_2)
         if args.ligand_2_contacts:
             complex_spec.pocket(
-                args.ligand_2_id,
+                ligand_2,
                 contacts=_parse_token_refs(args.ligand_2_contacts),
                 max_distance=args.pocket_distance,
                 force=args.pocket_force,
@@ -104,7 +106,7 @@ def build_complex(model: Boltz2, args: argparse.Namespace):
         complex_spec.contact(token1, token2, max_distance=args.contact_distance)
 
     if args.affinity:
-        complex_spec.request_affinity(args.ligand_1_id)
+        complex_spec.request_affinity(ligand_1)
 
     return complex_spec
 
@@ -112,7 +114,7 @@ def build_complex(model: Boltz2, args: argparse.Namespace):
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for the example."""
     parser = argparse.ArgumentParser(
-        description="Predict a multi-ligand constrained complex with Boltz2.",
+        description="Predict a multi-ligand constrained complex with the unified API.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--name", default="multi_pocket_complex", help="Spec name.")
@@ -145,7 +147,6 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Share the same MSA object for A/B if sequences match.",
     )
-    parser.add_argument("--ligand-1-id", default="L1", help="Primary ligand chain id.")
     parser.add_argument(
         "--ligand-1-smiles",
         default="CCO",
@@ -156,7 +157,6 @@ def parse_args() -> argparse.Namespace:
         default="A:8,B:12",
         help="Pocket contacts for ligand 1 (CHAIN:RES).",
     )
-    parser.add_argument("--ligand-2-id", default="L2", help="Secondary ligand chain id.")
     parser.add_argument(
         "--ligand-2-smiles",
         default="",
@@ -201,14 +201,14 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """Run the example and print a brief prediction summary."""
     args = parse_args()
-    model = Boltz2()
-    complex_spec = build_complex(model, args)
-    mmcif = complex_spec.to_mmcif()
+    complex_spec = build_complex(args)
+    result = complex_spec.fold()
+    mmcif = result.to_mmcif()
 
     print("Predicted multi-ligand complex:")
     print(f"- mmcif_chars: {len(mmcif)}")
     if args.affinity:
-        affinity = complex_spec.get_affinity(args.ligand_1_id)
+        affinity = result.affinity
         print(f"- ic50: {affinity.ic50}")
         print(f"- binding_probability: {affinity.binding_probability}")
 

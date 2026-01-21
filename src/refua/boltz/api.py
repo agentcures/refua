@@ -1278,6 +1278,10 @@ class FoldComplex:
         self._spec.request_affinity(binder)
         return self
 
+    def fold(self, **predict_overrides: Any) -> StructurePrediction:
+        """Run a structure prediction and return the in-memory structure."""
+        return self._predict_structure(**predict_overrides)
+
     def to_mmcif(self, **predict_overrides: Any) -> str:
         prediction = self._predict_structure(**predict_overrides)
         return to_mmcif(

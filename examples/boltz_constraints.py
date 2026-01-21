@@ -1,11 +1,11 @@
-"""Protein-ligand complex with pocket/contact constraints using Boltz2."""
+"""Protein-ligand complex with pocket/contact constraints using the unified API."""
 
 from __future__ import annotations
 
 import argparse
 from typing import Tuple, Union
 
-from refua import Boltz2
+from refua import Complex, Protein, SM
 from refua.boltz.api import msa_from_a3m
 
 
@@ -45,24 +45,27 @@ def _build_demo_msa(sequence: str) -> str:
     return f">query\n{sequence}\n>alt\n{sequence}\n"
 
 
-def build_complex(model: Boltz2, args: argparse.Namespace):
-    """Create a Boltz2 complex with optional constraints and affinity request."""
+def build_complex(args: argparse.Namespace):
+    """Create a complex with optional constraints and affinity request."""
     msa = None
     if args.use_msa:
         msa = msa_from_a3m(_build_demo_msa(args.protein_sequence))
 
-    complex_spec = model.fold_complex(args.name).protein(
-        args.protein_id, args.protein_sequence, msa=msa
+    complex_spec = Complex(name=args.name).add(
+        Protein(args.protein_sequence, ids=args.protein_id, msa=msa)
     )
     if args.partner_sequence:
-        complex_spec.protein(args.partner_id, args.partner_sequence)
+        complex_spec.add(
+            Protein(args.partner_sequence, ids=args.partner_id)
+        )
 
-    complex_spec.ligand(args.ligand_id, args.ligand_smiles)
+    ligand = SM(args.ligand_smiles)
+    complex_spec.add(ligand)
 
     if args.pocket_contacts:
         contacts = _parse_token_refs(args.pocket_contacts)
         complex_spec.pocket(
-            args.ligand_id,
+            ligand,
             contacts=contacts,
             max_distance=args.pocket_distance,
             force=args.pocket_force,
@@ -73,7 +76,7 @@ def build_complex(model: Boltz2, args: argparse.Namespace):
         complex_spec.contact(token1, token2, max_distance=args.contact_distance)
 
     if args.affinity:
-        complex_spec.request_affinity(args.ligand_id)
+        complex_spec.request_affinity(ligand)
 
     return complex_spec
 
@@ -81,7 +84,7 @@ def build_complex(model: Boltz2, args: argparse.Namespace):
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for the example."""
     parser = argparse.ArgumentParser(
-        description="Predict a constrained protein-ligand complex with Boltz2.",
+        description="Predict a constrained protein-ligand complex with the unified API.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--name", default="boltz_constraints", help="Spec name.")
@@ -101,7 +104,6 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Optional partner protein sequence.",
     )
-    parser.add_argument("--ligand-id", default="L", help="Ligand chain id.")
     parser.add_argument(
         "--ligand-smiles",
         default="CCO",
@@ -150,14 +152,14 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """Run the example and print a brief prediction summary."""
     args = parse_args()
-    model = Boltz2()
-    complex_spec = build_complex(model, args)
-    mmcif = complex_spec.to_mmcif()
+    complex_spec = build_complex(args)
+    result = complex_spec.fold()
+    mmcif = result.to_mmcif()
 
     print("Predicted constrained complex:")
     print(f"- mmcif_chars: {len(mmcif)}")
     if args.affinity:
-        affinity = complex_spec.get_affinity()
+        affinity = result.affinity
         print(f"- ic50: {affinity.ic50}")
         print(f"- binding_probability: {affinity.binding_probability}")
 
