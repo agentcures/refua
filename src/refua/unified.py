@@ -2,10 +2,14 @@ from __future__ import annotations
 
 """Unified API bridging Boltz2 folding and BoltzGen design inputs."""
 
+import gc
 import string
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections import OrderedDict
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 
 from rdkit import Chem
@@ -18,7 +22,6 @@ from refua.boltz.api import (
     Modification,
     StructurePrediction,
     bcif_bytes_from_structure,
-    to_mmcif,
 )
 from refua.boltzgen.api import BoltzGen, Trace as BoltzGenTrace
 from refua.chem import MolProperties, SmallMolecule
@@ -169,6 +172,8 @@ class FoldResult:
     def to_mmcif(self) -> str:
         if self.structure is None:
             raise ValueError("No Boltz2 structure available.")
+        from refua.boltz.data.write.mmcif import to_mmcif  # noqa: PLC0415
+
         return to_mmcif(
             self.structure.structure,
             plddts=self.structure.plddt,
@@ -186,6 +191,148 @@ class FoldResult:
 
 
 Entity = Protein | DNA | RNA | Binder | DesignFile | MolProperties | SmallMolecule | Mol
+
+_REFUA_ENV: ContextVar[RefuaEnv | None] = ContextVar(
+    "refua_model_context",
+    default=None,
+)
+
+
+def _is_cuda_oom(exc: BaseException) -> bool:
+    message = str(exc)
+    if "CUDA out of memory" in message or "CUDA error: out of memory" in message:
+        return True
+    try:
+        import torch  # noqa: PLC0415
+    except ImportError:
+        return False
+    return isinstance(exc, torch.cuda.OutOfMemoryError)
+
+
+def _release_cuda_memory() -> None:
+    gc.collect()
+    try:
+        import torch  # noqa: PLC0415
+    except ImportError:
+        return
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+class _ModelProxy:
+    def __init__(self, context: RefuaEnv, key: str) -> None:
+        self._context = context
+        self._key = key
+
+    def __getattr__(self, name: str) -> Any:
+        model = self._context._resolve(self._key)  # noqa: SLF001
+        return getattr(model, name)
+
+
+class RefuaEnv:
+    """Context manager that lazily loads and caches shared models.
+
+    Models load on first use and may evict the last used model on CUDA OOM.
+    """
+
+    def __init__(
+        self,
+        *,
+        boltz_factory: Callable[[], Boltz2] | None = None,
+        boltzgen_factory: Callable[[], BoltzGen] | None = None,
+    ) -> None:
+        self._factories: dict[str, Callable[[], object]] = {
+            "boltz": boltz_factory or Boltz2,
+            "boltzgen": boltzgen_factory or BoltzGen,
+        }
+        self._instances: dict[str, object] = {}
+        self._usage: OrderedDict[str, None] = OrderedDict()
+        self._closed = False
+        self._token: Token[RefuaEnv | None] | None = None
+        self._boltz_proxy = _ModelProxy(self, "boltz")
+        self._boltzgen_proxy = _ModelProxy(self, "boltzgen")
+
+    @property
+    def boltz(self) -> _ModelProxy:
+        """Return a lazy Boltz2 proxy."""
+        return self._boltz_proxy
+
+    @property
+    def boltzgen(self) -> _ModelProxy:
+        """Return a lazy BoltzGen proxy."""
+        return self._boltzgen_proxy
+
+    def close(self) -> None:
+        """Unload any cached models and release GPU memory."""
+        if self._closed:
+            return
+        self._closed = True
+        for key in list(self._instances):
+            self._unload(key)
+        self._instances.clear()
+        self._usage.clear()
+
+    def __enter__(self) -> RefuaEnv:
+        self._token = _REFUA_ENV.set(self)
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        try:
+            self.close()
+        finally:
+            if self._token is not None:
+                _REFUA_ENV.reset(self._token)
+                self._token = None
+
+    def _resolve(self, key: str) -> object:
+        if self._closed:
+            raise RuntimeError("Model context is closed.")
+        if key in self._instances:
+            self._touch(key)
+            return self._instances[key]
+        return self._load(key)
+
+    def _load(self, key: str) -> object:
+        factory = self._factories[key]
+        while True:
+            try:
+                instance = factory()
+            except RuntimeError as exc:
+                if not _is_cuda_oom(exc):
+                    raise
+                if not self._evict_last_used():
+                    raise
+                continue
+            self._instances[key] = instance
+            self._touch(key)
+            return instance
+
+    def _touch(self, key: str) -> None:
+        if key in self._usage:
+            self._usage.move_to_end(key)
+        else:
+            self._usage[key] = None
+
+    def _evict_last_used(self) -> bool:
+        if not self._usage:
+            return False
+        key, _ = self._usage.popitem(last=True)
+        self._unload(key)
+        return True
+
+    def _unload(self, key: str) -> None:
+        instance = self._instances.pop(key, None)
+        if instance is None:
+            return
+        unload = getattr(instance, "unload", None)
+        if callable(unload):
+            unload()
+        _release_cuda_memory()
 
 
 class Complex:
@@ -210,6 +357,29 @@ class Complex:
         self._constraints: list[BondConstraint | PocketConstraint | ContactConstraint] = []
         self._affinity_requested = False
         self._affinity_binder: str | object | None = None
+
+    def _resolve_boltz_model(self, boltz: Boltz2 | None) -> Boltz2 | _ModelProxy:
+        if boltz is not None:
+            return boltz
+        if self._boltz is not None:
+            return self._boltz
+        context = _REFUA_ENV.get()
+        if context is not None:
+            return context.boltz
+        return Boltz2()
+
+    def _resolve_boltzgen_model(
+        self,
+        boltzgen: BoltzGen | None,
+    ) -> BoltzGen | _ModelProxy:
+        if boltzgen is not None:
+            return boltzgen
+        if self._boltzgen is not None:
+            return self._boltzgen
+        context = _REFUA_ENV.get()
+        if context is not None:
+            return context.boltzgen
+        return BoltzGen()
 
     def add(self, *entities: Entity) -> Complex:
         """Append entities to the complex."""
@@ -340,7 +510,7 @@ class Complex:
         if not ligands:
             raise ValueError("Affinity requires at least one ligand entity.")
 
-        boltz_model = boltz or self._boltz or Boltz2()
+        boltz_model = self._resolve_boltz_model(boltz)
         fold_complex = _build_boltz_complex(
             boltz_model,
             self.name,
@@ -405,7 +575,7 @@ class Complex:
                 raise ValueError(
                     "Boltz folding requires at least one protein, DNA, RNA, or ligand."
                 )
-            boltz_model = boltz or self._boltz or Boltz2()
+            boltz_model = self._resolve_boltz_model(boltz)
             fold_complex = _build_boltz_complex(
                 boltz_model,
                 self.name,
@@ -432,7 +602,7 @@ class Complex:
         if run_boltzgen:
             if dnas or rnas:
                 raise ValueError("BoltzGen does not support DNA/RNA entities.")
-            boltzgen_model = boltzgen or self._boltzgen or BoltzGen()
+            boltzgen_model = self._resolve_boltzgen_model(boltzgen)
             design_base_dir = self.base_dir
             if design_base_dir is None and files:
                 try:
@@ -481,7 +651,7 @@ class Complex:
                 )
             for _, ids, smiles in ligands:
                 design_builder.ligand(ids, smiles=smiles)
-            design = design_builder.to_features(return_trace=True)
+            design = design_builder.to_features(return_trace=True)  # type: ignore[assignment]
             backends.append("boltzgen")
 
         backend = "+".join(backends) if backends else "none"
@@ -668,7 +838,7 @@ def _apply_constraints(
 
 
 def _build_boltz_complex(
-    boltz_model: Boltz2,
+    boltz_model: Boltz2 | _ModelProxy,
     name: str,
     proteins: Sequence[tuple[Protein, tuple[str, ...]]],
     dnas: Sequence[tuple[DNA, tuple[str, ...]]],
