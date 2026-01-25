@@ -9,7 +9,7 @@ from refua.chem import (
     available_mol_property_groups,
     register_mol_property,
 )
-from refua.unified import Binder, Complex, DNA, Protein, RNA
+from refua.unified import Binder, Complex, DNA, RefuaEnv, Protein, RNA
 from refua.boltz.api import Boltz2
 from refua.boltzgen.api import BoltzGen
 
@@ -27,6 +27,7 @@ __all__ = [
     "DNA",
     "MolProperties",
     "Protein",
+    "RefuaEnv",
     "RNA",
     "SM",
     "SmallMolecule",
