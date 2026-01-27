@@ -59,8 +59,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://tensorspace.ai/"
-Repository = "https://github.com/tensorspace-ai/refua"
+Homepage = "https://agentcures.com/"
+Repository = "https://github.com/agentcures/refua"
 
 [project.scripts]
 boltz = "refua.boltz.main:cli"
