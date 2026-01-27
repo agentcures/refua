@@ -75,6 +75,7 @@ doc = [
     "myst-parser>=2.0.0",
     "sphinx-autodoc-typehints>=1.25.2",
 ]
+admet = ["transformers>=4.45.0"]
 cuda = [
     "cuequivariance_ops_cu12>=0.5.0",
     "cuequivariance_ops_torch_cu12>=0.5.0",
