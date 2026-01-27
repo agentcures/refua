@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 import re
+from typing import Any
 
 from rdkit import Chem
 from rdkit.Chem import Descriptors, QED
@@ -44,6 +45,7 @@ _ALIASES: dict[str, str] = {
     "aromatic_rings": "num_aromatic_rings",
     "heavy_atoms": "heavy_atom_count",
     "hetero_atoms": "num_heteroatoms",
+    "h_erg": "herg",
 }
 
 _BASIC_PROPERTIES = {
@@ -198,6 +200,67 @@ for _spec in _EXTRA_PROPERTIES:
     _register_property(_spec, allow_existing=True)
 
 
+def _admet_profile_from_mol(mol: Mol) -> dict[str, Any]:
+    from refua.admet import admet_profile  # noqa: PLC0415
+
+    smiles = Chem.MolToSmiles(mol, canonical=True)
+    return admet_profile(smiles, copy_result=False)
+
+
+def _admet_prediction_fn(task_id: str) -> PropertyFn:
+    def _fn(mol: Mol) -> PropertyValue:
+        profile = _admet_profile_from_mol(mol)
+        predictions = profile.get("predictions")
+        if isinstance(predictions, dict):
+            return predictions.get(task_id)
+        return None
+
+    return _fn
+
+
+def _admet_summary_fn(summary_key: str) -> PropertyFn:
+    def _fn(mol: Mol) -> PropertyValue:
+        profile = _admet_profile_from_mol(mol)
+        value = profile.get(summary_key)
+        if isinstance(value, (float, int)):
+            return value
+        return None
+
+    return _fn
+
+
+def _register_admet_properties() -> None:
+    from refua.admet import ENDPOINTS  # noqa: PLC0415
+
+    for endpoint in ENDPOINTS:
+        name = _normalize_name(endpoint.task_id)
+        description = endpoint.description
+        groups = ("admet", endpoint.category, "optional")
+        spec = MolPropertySpec(
+            name=name,
+            fn=_admet_prediction_fn(endpoint.task_id),
+            description=description,
+            groups=groups,
+        )
+        _register_property(spec)
+
+    for name, description in (
+        ("admet_score", "Overall ADMET score."),
+        ("safety_score", "Safety-focused score derived from ADMET predictions."),
+        ("adme_score", "ADME-focused score derived from predictions."),
+    ):
+        spec = MolPropertySpec(
+            name=name,
+            fn=_admet_summary_fn(name),
+            description=description,
+            groups=("admet", "summary", "optional"),
+        )
+        _register_property(spec)
+
+
+_register_admet_properties()
+
+
 def SM(
     smiles_or_mol: str | Mol,
     *,
@@ -289,11 +352,49 @@ class MolProperties:
             raise KeyError(msg)
         return self._compute(normalized)
 
-    def to_dict(self) -> dict[str, PropertyValue]:
-        """Compute all registered properties and return their values."""
-        for name in _PROPERTY_REGISTRY:
-            self._compute(name)
-        return dict(self._values)
+    def to_dict(
+        self,
+        *,
+        groups: Iterable[str] | None = None,
+        include_optional: bool = False,
+    ) -> dict[str, PropertyValue]:
+        """Compute registered properties and return their values.
+
+        Parameters
+        ----------
+        groups : Iterable[str], optional
+            Restrict computation to properties that are in any of these groups.
+        include_optional : bool, optional
+            When ``groups`` is None, include optional properties (default False).
+        """
+        group_filter = {group.lower() for group in groups} if groups else None
+        results: dict[str, PropertyValue] = {}
+        for name, spec in _PROPERTY_REGISTRY.items():
+            if group_filter is not None:
+                if not group_filter.intersection(spec.groups):
+                    continue
+            elif not include_optional and "optional" in spec.groups:
+                continue
+            results[name] = self._compute(name)
+        return results
+
+    def admet_profile(
+        self,
+        *,
+        max_new_tokens: int = 8,
+        include_scoring: bool = True,
+        model_variant: str = "9b-chat",
+    ) -> dict[str, Any]:
+        """Return model-based ADMET predictions for this molecule."""
+        from refua.admet import admet_profile  # noqa: PLC0415
+
+        smiles = Chem.MolToSmiles(self._mol, canonical=True)
+        return admet_profile(
+            smiles,
+            model_variant=model_variant,
+            max_new_tokens=max_new_tokens,
+            include_scoring=include_scoring,
+        )
 
     def __getitem__(self, name: str) -> PropertyValue:
         return self.get(name)

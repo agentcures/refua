@@ -33,10 +33,17 @@ from pathlib import Path
 
 from refua import Binder, Complex, Protein, SM
 
-target = Protein("MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ", ids="A")
+target = Protein(
+    "MSEQNNTEMTFQIQRIYTKDISFEAPNAPHVFQQLAGKYTPEEIRNVLSTLQKAD",
+    ids="A",
+)
 
 # Protein + ligand -> Boltz2 structure + affinity
-result = Complex([target, SM("CCO")], name="demo").request_affinity().fold()
+result = (
+    Complex([target, SM("Cn1cnc2n(C)c(=O)n(C)c(=O)c12")], name="demo")
+    .request_affinity()
+    .fold()
+)
 Path("complex.bcif").write_bytes(result.to_bcif())
 print(result.affinity.ic50, result.affinity.binding_probability)
 
@@ -54,12 +61,21 @@ Small molecule properties:
 ```python
 from refua import SM
 
-props = SM("CCO", lazy=True)
+props = SM("Cn1cnc2n(C)c(=O)n(C)c(=O)c12", lazy=True)
 print(props.mol_wt(), props.logp())
 print(props.to_dict())
 ```
 
 Pass `lazy=False` to compute all properties eagerly.
+
+Model-based ADMET predictions (optional; requires `refua[admet]`):
+
+```python
+props = SM("Cn1cnc2n(C)c(=O)n(C)c(=O)c12")
+profile = props.admet_profile()
+print(profile["admet_score"], profile["assessment"])
+print(props.herg(), props.ames())
+```
 
 BoltzGen defaults to the bundled molecule library in the Hugging Face cache. Set `BOLTZGEN_MOLDIR` or pass `mol_dir` to override.
 
