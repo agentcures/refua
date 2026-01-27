@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from importlib.util import find_spec
+from inspect import signature
 from pathlib import Path
+from typing import Any
 
 ChainIds = str | Sequence[str]
 ResidueId = int | str
@@ -126,12 +129,27 @@ def _resolve_boltz_cache_dir(path: str | Path | None) -> Path:
     return Path("~/.boltz").expanduser()
 
 
+def _admet_support_available() -> bool:
+    return (
+        find_spec("transformers") is not None
+        and find_spec("huggingface_hub") is not None
+    )
+
+
+def _supports_hf_kwarg(fn: Callable[..., Any], name: str) -> bool:
+    try:
+        return name in signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 def _download_hf_artifact(
     artifact: str,
     *,
     repo_type: str,
     cache_dir: Path | None,
     token: str | None,
+    skip_existing: bool,
 ) -> Path:
     if not artifact.startswith("huggingface:"):
         resolved = Path(artifact).expanduser()
@@ -156,15 +174,26 @@ def _download_hf_artifact(
             "huggingface_hub is required to download BoltzGen assets."
         ) from exc
 
-    resolved_path = hf_hub_download(
-        repo_id,
-        filename,
-        repo_type=repo_type,
-        library_name="boltzgen",
-        cache_dir=str(cache_dir) if cache_dir is not None else None,
-        token=token,
-    )
-    return Path(resolved_path)
+    def _download(local_files_only: bool) -> Path:
+        kwargs = {
+            "repo_id": repo_id,
+            "filename": filename,
+            "repo_type": repo_type,
+            "library_name": "boltzgen",
+            "cache_dir": str(cache_dir) if cache_dir is not None else None,
+            "token": token,
+        }
+        if _supports_hf_kwarg(hf_hub_download, "local_files_only"):
+            kwargs["local_files_only"] = local_files_only
+        return Path(hf_hub_download(**kwargs))
+
+    if skip_existing:
+        try:
+            return _download(local_files_only=True)
+        except Exception:
+            pass
+
+    return _download(local_files_only=False)
 
 
 def _looks_like_hf_auth_error(exc: Exception) -> bool:
@@ -188,6 +217,7 @@ def _download_txgemma_repo(
     *,
     cache_dir: Path | None,
     token: str | None,
+    skip_existing: bool,
 ) -> Path:
     try:
         from huggingface_hub import snapshot_download  # noqa: PLC0415
@@ -196,12 +226,24 @@ def _download_txgemma_repo(
             "huggingface_hub is required to download TxGemma assets."
         ) from exc
 
+    def _download(local_files_only: bool) -> Path:
+        kwargs = {
+            "repo_id": repo_id,
+            "cache_dir": str(cache_dir) if cache_dir is not None else None,
+            "token": token,
+        }
+        if _supports_hf_kwarg(snapshot_download, "local_files_only"):
+            kwargs["local_files_only"] = local_files_only
+        return Path(snapshot_download(**kwargs))
+
+    if skip_existing:
+        try:
+            return _download(local_files_only=True)
+        except Exception:
+            pass
+
     try:
-        resolved_path = snapshot_download(
-            repo_id=repo_id,
-            cache_dir=str(cache_dir) if cache_dir is not None else None,
-            token=token,
-        )
+        resolved_path = _download(local_files_only=False)
     except Exception as exc:
         if _looks_like_hf_auth_error(exc):
             msg = (
@@ -222,7 +264,8 @@ def download_assets(
     boltzgen_cache_dir: str | Path | None = None,
     download_boltz2: bool = True,
     download_boltzgen: bool = True,
-    download_txgemma: bool = False,
+    download_txgemma: bool | None = None,
+    skip_existing: bool = True,
     models_token: str | None = None,
     txgemma_variant: str = _DEFAULT_TXGEMMA_VARIANT,
 ) -> dict[str, dict[str, Path]]:
@@ -239,7 +282,10 @@ def download_assets(
     download_boltzgen : bool, optional
         Whether to download BoltzGen assets. Default: True.
     download_txgemma : bool, optional
-        Whether to download TxGemma ADMET assets. Default: False.
+        Whether to download TxGemma ADMET assets. Default: auto (True if ADMET
+        dependencies are installed, otherwise False).
+    skip_existing : bool, optional
+        Whether to skip downloads when assets already exist locally. Default: True.
     models_token : str, optional
         Optional Hugging Face token (defaults to $HF_TOKEN if set).
     txgemma_variant : str, optional
@@ -250,6 +296,9 @@ def download_assets(
     dict[str, dict[str, Path]]
         Mapping of asset groups to local paths.
     """
+    if download_txgemma is None:
+        download_txgemma = _admet_support_available()
+
     if not (download_boltz2 or download_boltzgen or download_txgemma):
         raise ValueError(
             "At least one of download_boltz2, download_boltzgen, or "
@@ -261,9 +310,17 @@ def download_assets(
     if download_boltz2:
         cache_dir = _resolve_boltz_cache_dir(boltz_cache_dir)
         cache_dir.mkdir(parents=True, exist_ok=True)
-        from refua.boltz.main import download_boltz2 as _download_boltz2  # noqa: PLC0415
+        if not (
+            skip_existing
+            and (cache_dir / "mols").exists()
+            and (cache_dir / "boltz2_conf.ckpt").exists()
+            and (cache_dir / "boltz2_aff.ckpt").exists()
+        ):
+            from refua.boltz.main import (  # noqa: PLC0415
+                download_boltz2 as _download_boltz2,
+            )
 
-        _download_boltz2(cache_dir)
+            _download_boltz2(cache_dir)
         results["boltz2"] = {
             "mols": cache_dir / "mols",
             "model": cache_dir / "boltz2_conf.ckpt",
@@ -290,6 +347,7 @@ def download_assets(
                 repo_type=repo_type,
                 cache_dir=cache_dir,
                 token=token,
+                skip_existing=skip_existing,
             )
         results["boltzgen"] = boltzgen_assets
 
@@ -300,6 +358,7 @@ def download_assets(
                 repo_id,
                 cache_dir=cache_dir,
                 token=token,
+                skip_existing=skip_existing,
             )
         }
 
