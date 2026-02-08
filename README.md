@@ -86,6 +86,23 @@ disulfide_peptide = BinderDesigns.disulfide_peptide(
 )
 ```
 
+Low-level `Binder` API for arbitrary macromolecule design:
+
+```python
+from refua import Binder, Complex, Protein
+
+target = Protein("MSEQNNTEMTFQIQRIYTKDISFEAPNAPHVFQQLAGKYTPEEIRNVLSTLQKAD", ids="A")
+macro = Binder(
+    spec="{core}C{loop}C{tail}",  # Any BoltzGen-compatible sequence-spec pattern.
+    template_values={"core": 10, "loop": 6, "tail": 4},
+    ids="M",
+    binding_types="3..12",
+    cyclic=True,
+)
+result = Complex([target, macro], name="custom_macro_design").fold()
+print(result.binder_specs)
+```
+
 Small molecule properties:
 
 ```python
