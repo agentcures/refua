@@ -273,8 +273,10 @@ class FoldResult:
         if tokens is None or chains is None:
             return ()
 
-        token_fields = set(getattr(getattr(tokens, "dtype", None), "names", ()) or ())
-        chain_fields = set(getattr(getattr(chains, "dtype", None), "names", ()) or ())
+        token_names = getattr(getattr(tokens, "dtype", None), "names", ()) or ()
+        chain_names = getattr(getattr(chains, "dtype", None), "names", ()) or ()
+        token_fields: set[str] = {str(name) for name in token_names}
+        chain_fields: set[str] = {str(name) for name in chain_names}
         if not {"asym_id", "res_type"}.issubset(token_fields):
             return ()
         if not {"asym_id", "name"}.issubset(chain_fields):
