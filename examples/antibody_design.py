@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from refua import Complex
+from refua import Binder, BinderDesigns, Complex, Protein
 
 RBD_SEQUENCE = "RVQPTESIVRFPNITNLCPFGEVFNATRFASVYAWNRKRISNCVADYSVLYNSASFSTFKCYGVSPTKLNDLCFTNVYADSFVIRGDEVRQIAPGQTGKIADYNYKLPDDFTGCVIAWNSNNLDSKVGGNYNYLYRLFRKSNLKPFERDISTEIYQAGSTPCNGVEGFNCYFPLQSYGFQPTNGVGYQPYRVVVLSFELLHAPATVCGPKKSTNLVKNKCVNF"
 
@@ -23,18 +23,36 @@ def _parse_cdr_lengths(value: str, label: str) -> tuple[int, int, int]:
 def build_design(args: argparse.Namespace) -> Complex:
     heavy_cdr_lengths = _parse_cdr_lengths(args.heavy_cdr_lengths, "heavy-cdr-lengths")
     light_cdr_lengths = _parse_cdr_lengths(args.light_cdr_lengths, "light-cdr-lengths")
-    return Complex.antibody_design(
-        antigen=args.antigen_sequence,
-        epitope=args.epitope,
-        heavy=args.heavy,
-        light=args.light,
+    epitope = args.epitope.strip()
+    if not epitope:
+        raise ValueError("epitope must be a non-empty residue range.")
+    if args.heavy is not None and not args.heavy.strip():
+        raise ValueError("heavy binder spec must be non-empty.")
+    if args.light is not None and not args.light.strip():
+        raise ValueError("light binder spec must be non-empty.")
+
+    antigen = Protein(
+        args.antigen_sequence,
+        ids=args.antigen_id,
+        binding_types={"binding": epitope},
+    )
+    pair = BinderDesigns.antibody(
         heavy_cdr_lengths=heavy_cdr_lengths,
         light_cdr_lengths=light_cdr_lengths,
-        antigen_id=args.antigen_id,
         heavy_id=args.heavy_id,
         light_id=args.light_id,
-        name=args.name,
     )
+    heavy = (
+        pair.heavy
+        if args.heavy is None
+        else Binder(args.heavy.strip(), ids=args.heavy_id)
+    )
+    light = (
+        pair.light
+        if args.light is None
+        else Binder(args.light.strip(), ids=args.light_id)
+    )
+    return Complex([antigen, heavy, light], name=args.name)
 
 
 def parse_args() -> argparse.Namespace:

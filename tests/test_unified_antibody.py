@@ -5,7 +5,14 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from refua import Binder, Complex, Protein, antibody_framework_specs
+from refua import (
+    AntibodyBinders,
+    Binder,
+    BinderDesigns,
+    Complex,
+    Protein,
+    antibody_framework_specs,
+)
 from refua.unified import FoldResult
 
 
@@ -30,11 +37,58 @@ def test_binder_template_values_missing_placeholder_raises() -> None:
         binder.sequence_spec()
 
 
-def test_complex_antibody_design_builds_default_entities() -> None:
-    design = Complex.antibody_design(
-        "ACDEFGHIKLMNPQRSTVWY" * 12,
-        epitope="30..80",
+def test_binder_designs_antibody_returns_coherent_pair() -> None:
+    heavy_lengths = (13, 11, 15)
+    light_lengths = (9, 8, 10)
+    expected_heavy, expected_light = antibody_framework_specs(
+        heavy_cdr_lengths=heavy_lengths,
+        light_cdr_lengths=light_lengths,
     )
+
+    pair = BinderDesigns.antibody(
+        heavy_cdr_lengths=heavy_lengths,
+        light_cdr_lengths=light_lengths,
+        heavy_id="VH",
+        light_id="VL",
+    )
+    assert isinstance(pair, AntibodyBinders)
+    assert tuple(pair) == pair.as_tuple()
+    assert pair.heavy.ids == "VH"
+    assert pair.light.ids == "VL"
+    assert pair.heavy.sequence == expected_heavy
+    assert pair.light.sequence == expected_light
+
+
+def test_binder_designs_peptide_presets() -> None:
+    linear = BinderDesigns.peptide(length=14, ids="P")
+    disulfide = BinderDesigns.disulfide_peptide(segment_lengths=(10, 6, 3), ids="Q")
+
+    assert isinstance(linear, Binder)
+    assert linear.ids == "P"
+    assert linear.sequence == "14"
+    assert linear.cyclic is False
+
+    assert isinstance(disulfide, Binder)
+    assert disulfide.ids == "Q"
+    assert disulfide.sequence == "10C6C3"
+    assert disulfide.cyclic is True
+
+
+def test_binder_designs_disulfide_peptide_validates_segments() -> None:
+    with pytest.raises(ValueError, match="must have exactly three values"):
+        BinderDesigns.disulfide_peptide(segment_lengths=(8, 5))
+    with pytest.raises(ValueError, match="must be >= 1"):
+        BinderDesigns.disulfide_peptide(segment_lengths=(8, 0, 5))
+
+
+def test_explicit_antibody_complex_builds_default_entities() -> None:
+    antigen = Protein(
+        "ACDEFGHIKLMNPQRSTVWY" * 12,
+        ids="A",
+        binding_types={"binding": "30..80"},
+    )
+    pair = BinderDesigns.antibody()
+    design = Complex([antigen, *pair], name="antibody_design")
     antigen, heavy, light = design.entities
     assert isinstance(antigen, Protein)
     assert isinstance(heavy, Binder)
@@ -49,72 +103,42 @@ def test_complex_antibody_design_builds_default_entities() -> None:
     assert light.sequence == expected_light
 
 
-def test_standard_complex_antibody_binders_match_helper_defaults() -> None:
+def test_standard_complex_antibody_binders_match_framework_specs() -> None:
     antigen_sequence = "ACDEFGHIKLMNPQRSTVWY" * 12
     heavy_lengths = (12, 10, 14)
     light_lengths = (10, 9, 9)
 
-    helper = Complex.antibody_design(
-        antigen_sequence,
-        epitope="30..80",
-        heavy_cdr_lengths=heavy_lengths,
-        light_cdr_lengths=light_lengths,
-    )
-    helper_antigen, helper_heavy, helper_light = helper.entities
-
     explicit = Complex(
         [
             Protein(antigen_sequence, ids="A", binding_types={"binding": "30..80"}),
-            Binder(
-                spec=(
-                    "QVQLVESGGGLVQPGGSLRLSCAAS{h1}WYRQAPGKEREWV{h2}"
-                    "ISSGGSTYYADSVKGRFTISRDNAKNTLYLQMNSLRAEDTAVYYC{h3}WGQGTLVTVSS"
-                ),
-                template_values={
-                    "h1": heavy_lengths[0],
-                    "h2": heavy_lengths[1],
-                    "h3": heavy_lengths[2],
-                },
-                ids="H",
-            ),
-            Binder(
-                spec=(
-                    "DIQMTQSPSSLSASVGDRVTITCRAS{l1}WYQQKPGKAPKLLIY{l2}"
-                    "ASSRATGIPDRFSGSGSGTDFTLTISRLEPEDFAVYYC{l3}FGGGTKVEIK"
-                ),
-                template_values={
-                    "l1": light_lengths[0],
-                    "l2": light_lengths[1],
-                    "l3": light_lengths[2],
-                },
-                ids="L",
+            *BinderDesigns.antibody(
+                heavy_cdr_lengths=heavy_lengths,
+                light_cdr_lengths=light_lengths,
+                heavy_id="H",
+                light_id="L",
             ),
         ],
         name="antibody_design",
     )
     explicit_antigen, explicit_heavy, explicit_light = explicit.entities
+    expected_heavy, expected_light = antibody_framework_specs(
+        heavy_cdr_lengths=heavy_lengths,
+        light_cdr_lengths=light_lengths,
+    )
 
-    assert isinstance(helper_antigen, Protein)
-    assert isinstance(helper_heavy, Binder)
-    assert isinstance(helper_light, Binder)
     assert isinstance(explicit_antigen, Protein)
     assert isinstance(explicit_heavy, Binder)
     assert isinstance(explicit_light, Binder)
 
-    assert explicit_antigen.binding_types == helper_antigen.binding_types
-    assert explicit_heavy.sequence == helper_heavy.sequence
-    assert explicit_light.sequence == helper_light.sequence
+    assert explicit_antigen.binding_types == {"binding": "30..80"}
+    assert explicit_heavy.sequence == expected_heavy
+    assert explicit_light.sequence == expected_light
 
 
-def test_complex_antibody_design_keeps_explicit_chain_ids() -> None:
+def test_explicit_antibody_design_keeps_explicit_chain_ids() -> None:
     antigen = Protein("M" * 60, ids="X")
-    heavy = Binder("8C6", ids="VH")
-    light = Binder("7C5", ids="VL")
-    design = Complex.antibody_design(
-        antigen,
-        heavy=heavy,
-        light=light,
-    )
+    pair = BinderDesigns.antibody(heavy_id="VH", light_id="VL")
+    design = Complex([antigen, *pair], name="antibody_design")
     resolved_antigen, resolved_heavy, resolved_light = design.entities
     assert isinstance(resolved_antigen, Protein)
     assert isinstance(resolved_heavy, Binder)

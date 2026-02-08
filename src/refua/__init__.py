@@ -10,7 +10,9 @@ from refua.chem import (
     register_mol_property,
 )
 from refua.unified import (
+    AntibodyBinders,
     Binder,
+    BinderDesigns,
     Complex,
     DNA,
     RefuaEnv,
@@ -30,7 +32,9 @@ except PackageNotFoundError:
 __all__ = [
     "Boltz2",
     "BoltzGen",
+    "AntibodyBinders",
     "Binder",
+    "BinderDesigns",
     "Complex",
     "DNA",
     "MolProperties",
