@@ -7,7 +7,7 @@ import string
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextvars import ContextVar, Token
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
 from typing import Any
@@ -202,6 +202,107 @@ class Binder:
     def sequence(self) -> str:
         """Return the design sequence spec string."""
         return self.sequence_spec()
+
+
+@dataclass(frozen=True, slots=True)
+class AntibodyBinders:
+    """Paired heavy/light binders produced by :class:`BinderDesigns`."""
+
+    heavy: Binder
+    light: Binder
+
+    def as_tuple(self) -> tuple[Binder, Binder]:
+        """Return ``(heavy, light)`` for use in ``Complex([...])``."""
+        return self.heavy, self.light
+
+    def __iter__(self) -> Iterator[Binder]:
+        yield self.heavy
+        yield self.light
+
+
+class BinderDesigns:
+    """High-level binder factories for common design patterns."""
+
+    @staticmethod
+    def peptide(
+        *,
+        length: int = 12,
+        ids: ChainIds = "P",
+        binding_types: str | Mapping[str, Any] | None = None,
+        secondary_structure: str | Mapping[str, Any] | None = None,
+        cyclic: bool = False,
+    ) -> Binder:
+        """Create a generic peptide binder placeholder."""
+        return Binder(
+            length=length,
+            ids=ids,
+            binding_types=binding_types,
+            secondary_structure=secondary_structure,
+            cyclic=cyclic,
+        )
+
+    @staticmethod
+    def disulfide_peptide(
+        *,
+        segment_lengths: Sequence[int] = (10, 6, 3),
+        ids: ChainIds = "P",
+        binding_types: str | Mapping[str, Any] | None = None,
+        secondary_structure: str | Mapping[str, Any] | None = None,
+        cyclic: bool = True,
+    ) -> Binder:
+        """Create a peptide spec with two cysteines (e.g., ``10C6C3``)."""
+        try:
+            normalized = tuple(int(length) for length in segment_lengths)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("peptide segment lengths must be integers.") from exc
+        if len(normalized) != 3:
+            raise ValueError("peptide segment lengths must have exactly three values.")
+        if any(length < 1 for length in normalized):
+            raise ValueError("peptide segment lengths must be >= 1.")
+        pre, mid, post = normalized
+        return Binder(
+            spec=f"{pre}C{mid}C{post}",
+            ids=ids,
+            binding_types=binding_types,
+            secondary_structure=secondary_structure,
+            cyclic=cyclic,
+        )
+
+    @staticmethod
+    def antibody(
+        *,
+        heavy_cdr_lengths: tuple[int, int, int] = _DEFAULT_HEAVY_CDR_LENGTHS,
+        light_cdr_lengths: tuple[int, int, int] = _DEFAULT_LIGHT_CDR_LENGTHS,
+        heavy_id: ChainIds = "H",
+        light_id: ChainIds = "L",
+        heavy_binding_types: str | Mapping[str, Any] | None = None,
+        light_binding_types: str | Mapping[str, Any] | None = None,
+        heavy_secondary_structure: str | Mapping[str, Any] | None = None,
+        light_secondary_structure: str | Mapping[str, Any] | None = None,
+        heavy_cyclic: bool = False,
+        light_cyclic: bool = False,
+    ) -> AntibodyBinders:
+        """Create coordinated heavy/light antibody binders in one call."""
+        heavy_spec, light_spec = antibody_framework_specs(
+            heavy_cdr_lengths=heavy_cdr_lengths,
+            light_cdr_lengths=light_cdr_lengths,
+        )
+        return AntibodyBinders(
+            heavy=Binder(
+                spec=heavy_spec,
+                ids=heavy_id,
+                binding_types=heavy_binding_types,
+                secondary_structure=heavy_secondary_structure,
+                cyclic=heavy_cyclic,
+            ),
+            light=Binder(
+                spec=light_spec,
+                ids=light_id,
+                binding_types=light_binding_types,
+                secondary_structure=light_secondary_structure,
+                cyclic=light_cyclic,
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -539,95 +640,6 @@ class Complex:
         self.last_affinity: AffinityPrediction | None = None
         self.ligand_rdkit: dict[str, Mapping[str, Any]] = {}
         self.ligand_admet: dict[str, Mapping[str, Any]] = {}
-
-    @classmethod
-    def antibody_design(
-        cls,
-        antigen: Protein | str,
-        *,
-        epitope: str | Mapping[str, Any] | None = None,
-        not_epitope: str | None = None,
-        heavy: Binder | str | int | None = None,
-        light: Binder | str | int | None = None,
-        heavy_cdr_lengths: tuple[int, int, int] = _DEFAULT_HEAVY_CDR_LENGTHS,
-        light_cdr_lengths: tuple[int, int, int] = _DEFAULT_LIGHT_CDR_LENGTHS,
-        antigen_id: ChainIds = "A",
-        heavy_id: ChainIds = "H",
-        light_id: ChainIds = "L",
-        name: str = "antibody_design",
-        base_dir: str | Path | None = None,
-        boltz: Boltz2 | None = None,
-        boltzgen: BoltzGen | None = None,
-    ) -> Complex:
-        """Create an antibody design complex with antigen, heavy, and light chains.
-
-        Parameters
-        ----------
-        antigen : Protein or str
-            Antigen target as a ``Protein`` entity or raw amino-acid sequence.
-        epitope : str or Mapping[str, Any], optional
-            Antigen binding mask for BoltzGen. String inputs map to
-            ``{"binding": epitope}``.
-        not_epitope : str, optional
-            Optional non-binding antigen range merged into ``epitope`` as
-            ``{"not_binding": ...}``.
-        heavy : Binder or str or int, optional
-            Heavy-chain binder spec. If omitted, a default human framework with
-            designable CDRs is generated from ``heavy_cdr_lengths``.
-        light : Binder or str or int, optional
-            Light-chain binder spec. If omitted, a default human framework with
-            designable CDRs is generated from ``light_cdr_lengths``.
-        heavy_cdr_lengths : tuple[int, int, int], optional
-            Default CDR-H1/H2/H3 lengths when ``heavy`` is omitted.
-        light_cdr_lengths : tuple[int, int, int], optional
-            Default CDR-L1/L2/L3 lengths when ``light`` is omitted.
-        antigen_id : ChainIds, optional
-            Antigen chain id(s) when not already set on ``antigen``.
-        heavy_id : ChainIds, optional
-            Heavy-chain id when not already set on ``heavy``.
-        light_id : ChainIds, optional
-            Light-chain id when not already set on ``light``.
-        """
-        epitope_binding_types = _normalize_epitope_binding_types(
-            epitope=epitope,
-            not_epitope=not_epitope,
-        )
-        antigen_entity = _coerce_antigen_entity(
-            antigen,
-            antigen_id=antigen_id,
-            epitope_binding_types=epitope_binding_types,
-        )
-
-        h1, h2, h3 = _coerce_cdr_lengths(heavy_cdr_lengths, label="heavy")
-        l1, l2, l3 = _coerce_cdr_lengths(light_cdr_lengths, label="light")
-        default_heavy = Binder(
-            spec=_DEFAULT_ANTIBODY_HEAVY_FRAMEWORK,
-            template_values={"h1": h1, "h2": h2, "h3": h3},
-        )
-        default_light = Binder(
-            spec=_DEFAULT_ANTIBODY_LIGHT_FRAMEWORK,
-            template_values={"l1": l1, "l2": l2, "l3": l3},
-        )
-        heavy_entity = _coerce_antibody_binder(
-            heavy,
-            default_binder=default_heavy,
-            chain_ids=heavy_id,
-            label="heavy",
-        )
-        light_entity = _coerce_antibody_binder(
-            light,
-            default_binder=default_light,
-            chain_ids=light_id,
-            label="light",
-        )
-
-        return cls(
-            [antigen_entity, heavy_entity, light_entity],
-            name=name,
-            base_dir=base_dir,
-            boltz=boltz,
-            boltzgen=boltzgen,
-        )
 
     def _resolve_boltz_model(self, boltz: Boltz2 | None) -> Boltz2 | _ModelProxy:
         if boltz is not None:
@@ -1000,93 +1012,6 @@ def _coerce_cdr_lengths(
         raise ValueError(f"{label} CDR lengths must be >= 1.")
     cdr1, cdr2, cdr3 = normalized
     return cdr1, cdr2, cdr3
-
-
-def _normalize_epitope_binding_types(
-    *,
-    epitope: str | Mapping[str, Any] | None,
-    not_epitope: str | None,
-) -> Mapping[str, Any] | None:
-    if epitope is None:
-        if not_epitope is not None:
-            raise ValueError("not_epitope requires epitope to be set.")
-        return None
-
-    if isinstance(epitope, str):
-        if not epitope.strip():
-            raise ValueError("epitope must be a non-empty range string.")
-        payload: dict[str, Any] = {"binding": epitope}
-    else:
-        payload = dict(epitope)
-        if not payload:
-            raise ValueError("epitope mapping must not be empty.")
-
-    if not_epitope is not None:
-        if "not_binding" in payload and payload["not_binding"] != not_epitope:
-            raise ValueError(
-                "epitope.not_binding conflicts with not_epitope argument.",
-            )
-        payload["not_binding"] = not_epitope
-    return payload
-
-
-def _coerce_antigen_entity(
-    antigen: Protein | str,
-    *,
-    antigen_id: ChainIds,
-    epitope_binding_types: Mapping[str, Any] | None,
-) -> Protein:
-    if isinstance(antigen, str):
-        if not antigen:
-            raise ValueError("antigen sequence must be non-empty.")
-        return Protein(
-            antigen,
-            ids=antigen_id,
-            binding_types=epitope_binding_types,
-        )
-    if not isinstance(antigen, Protein):
-        raise TypeError("antigen must be a Protein object or sequence string.")
-
-    result = antigen
-    if epitope_binding_types is not None:
-        if (
-            result.binding_types is not None
-            and result.binding_types != epitope_binding_types
-        ):
-            raise ValueError(
-                "Provide epitope via antibody_design() or on Protein.binding_types, not both.",
-            )
-        result = replace(result, binding_types=epitope_binding_types)
-    if result.ids is None:
-        result = replace(result, ids=antigen_id)
-    return result
-
-
-def _coerce_antibody_binder(
-    binder: Binder | str | int | None,
-    *,
-    default_binder: Binder,
-    chain_ids: ChainIds,
-    label: str,
-) -> Binder:
-    if binder is None:
-        result = default_binder
-    elif isinstance(binder, Binder):
-        result = binder
-    elif isinstance(binder, str):
-        if not binder:
-            raise ValueError(f"{label} binder spec must be non-empty.")
-        result = Binder(binder)
-    elif isinstance(binder, int):
-        result = Binder(length=binder)
-    else:
-        raise TypeError(
-            f"{label} binder must be a Binder, sequence spec string, integer length, or None.",
-        )
-
-    if result.ids is None:
-        result = replace(result, ids=chain_ids)
-    return result
 
 
 def _token_residue_symbol(

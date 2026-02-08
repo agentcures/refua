@@ -56,46 +56,34 @@ print("binder spec:", binder.sequence)
 
 For template-based designs, add `.file(...)` to the same `Complex` before `fold()`.
 
-Antibody-first helper (and equivalent explicit setup):
+Antibody design with `BinderDesigns` + `Complex`:
 
 ```python
-from refua import Binder, Complex, Protein
+from refua import Binder, BinderDesigns, Complex, Protein
 
 antigen_seq = "MSEQNNTEMTFQIQRIYTKDISFEAPNAPHVFQQLAGKYTPEEIRNVLSTLQKAD"
-
-# 1) Helper API
-design_from_helper = Complex.antibody_design(
-    antigen=antigen_seq,
-    epitope="10..30",
+antigen = Protein(antigen_seq, ids="A", binding_types={"binding": "10..30"})
+binder_pair = BinderDesigns.antibody(
     heavy_cdr_lengths=(12, 10, 14),
     light_cdr_lengths=(10, 9, 9),
+    heavy_id="H",
+    light_id="L",
 )
+design = Complex([antigen, *binder_pair], name="antibody_design")
 
-# 2) Equivalent explicit Complex + Binder setup
-antigen = Protein(antigen_seq, ids="A", binding_types={"binding": "10..30"})
-heavy = Binder(
-    spec=(
-        "QVQLVESGGGLVQPGGSLRLSCAAS{h1}WYRQAPGKEREWV{h2}"
-        "ISSGGSTYYADSVKGRFTISRDNAKNTLYLQMNSLRAEDTAVYYC{h3}WGQGTLVTVSS"
-    ),
-    template_values={"h1": 12, "h2": 10, "h3": 14},
-    ids="H",
-)
-light = Binder(
-    spec=(
-        "DIQMTQSPSSLSASVGDRVTITCRAS{l1}WYQQKPGKAPKLLIY{l2}"
-        "ASSRATGIPDRFSGSGSGTDFTLTISRLEPEDFAVYYC{l3}FGGGTKVEIK"
-    ),
-    template_values={"l1": 10, "l2": 9, "l3": 9},
-    ids="L",
-)
-design_from_entities = Complex([antigen, heavy, light], name="antibody_design")
+# Optional explicit overrides
+# design = Complex([antigen, Binder("8C6", ids="H"), Binder("7C5", ids="L")], name="antibody_design")
 
-# Both represent the same design intent; pick the style you prefer.
-result = design_from_helper.fold()
-# result = design_from_entities.fold()
+result = design.fold()
 print(result.binder_specs)
 print(result.chain_design_summary())
+
+# Peptide presets
+linear_peptide = BinderDesigns.peptide(length=14, ids="P")
+disulfide_peptide = BinderDesigns.disulfide_peptide(
+    segment_lengths=(10, 6, 3),
+    ids="Q",
+)
 ```
 
 Small molecule properties:
@@ -136,7 +124,7 @@ boltzgen --help
 
 ## Examples
 
-- `examples/antibody_design.py` shows an antibody-first design setup.
+- `examples/antibody_design.py` shows antibody setup with `BinderDesigns`.
 - `examples/protein_ligand_affinity.py` shows a protein-ligand affinity spec.
 - `examples/boltz2_kras_mrtx1133.py` folds KRAS G12D with the MRTX-1133 inhibitor and prints affinity.
 - `examples/boltzgen_peptide_binder.py` shows a peptide binder spec with optional cyclic peptides.
