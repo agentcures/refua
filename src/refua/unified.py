@@ -150,12 +150,13 @@ class RNA:
 class Binder:
     """Binder placeholder representing a designed molecule.
 
-    Use Binder(...) with a sequence spec (e.g., "10C6C3") or length, then
-    access .sequence for the design spec string.
+    Use Binder(...) with a sequence spec (e.g., ``"10C6C3"``), length, or a
+    template-style spec plus ``template_values`` to render dynamic placeholders.
     """
 
     spec: str | int | None = None
     length: int | None = None
+    template_values: Mapping[str, Any] | None = None
     ids: ChainIds | None = None
     binding_types: str | Mapping[str, Any] | None = None
     secondary_structure: str | Mapping[str, Any] | None = None
@@ -166,6 +167,10 @@ class Binder:
             raise ValueError("Binder accepts either spec or length, not both.")
         if self.spec is None and self.length is None:
             raise ValueError("Binder requires spec or length.")
+        if self.template_values is not None:
+            if not isinstance(self.spec, str):
+                raise ValueError("Binder template_values requires a string spec.")
+            object.__setattr__(self, "template_values", dict(self.template_values))
         if isinstance(self.spec, int):
             object.__setattr__(self, "length", self.spec)
             object.__setattr__(self, "spec", None)
@@ -178,7 +183,20 @@ class Binder:
             return str(self.length)
         if not isinstance(self.spec, str) or not self.spec:
             raise ValueError("Binder spec must be a non-empty string or int length.")
-        return self.spec
+        if self.template_values is None:
+            return self.spec
+        try:
+            rendered_spec = self.spec.format(**self.template_values)
+        except KeyError as exc:
+            missing = str(exc.args[0])
+            raise ValueError(
+                f"Binder spec template missing value for placeholder '{missing}'.",
+            ) from exc
+        except (ValueError, IndexError) as exc:
+            raise ValueError("Binder spec template formatting failed.") from exc
+        if not rendered_spec:
+            raise ValueError("Binder spec template rendered an empty string.")
+        return rendered_spec
 
     @property
     def sequence(self) -> str:
@@ -580,19 +598,25 @@ class Complex:
             epitope_binding_types=epitope_binding_types,
         )
 
-        default_heavy, default_light = antibody_framework_specs(
-            heavy_cdr_lengths=heavy_cdr_lengths,
-            light_cdr_lengths=light_cdr_lengths,
+        h1, h2, h3 = _coerce_cdr_lengths(heavy_cdr_lengths, label="heavy")
+        l1, l2, l3 = _coerce_cdr_lengths(light_cdr_lengths, label="light")
+        default_heavy = Binder(
+            spec=_DEFAULT_ANTIBODY_HEAVY_FRAMEWORK,
+            template_values={"h1": h1, "h2": h2, "h3": h3},
+        )
+        default_light = Binder(
+            spec=_DEFAULT_ANTIBODY_LIGHT_FRAMEWORK,
+            template_values={"l1": l1, "l2": l2, "l3": l3},
         )
         heavy_entity = _coerce_antibody_binder(
             heavy,
-            default_spec=default_heavy,
+            default_binder=default_heavy,
             chain_ids=heavy_id,
             label="heavy",
         )
         light_entity = _coerce_antibody_binder(
             light,
-            default_spec=default_light,
+            default_binder=default_light,
             chain_ids=light_id,
             label="light",
         )
@@ -1041,12 +1065,12 @@ def _coerce_antigen_entity(
 def _coerce_antibody_binder(
     binder: Binder | str | int | None,
     *,
-    default_spec: str,
+    default_binder: Binder,
     chain_ids: ChainIds,
     label: str,
 ) -> Binder:
     if binder is None:
-        result = Binder(default_spec)
+        result = default_binder
     elif isinstance(binder, Binder):
         result = binder
     elif isinstance(binder, str):
