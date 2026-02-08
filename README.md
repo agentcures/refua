@@ -56,18 +56,44 @@ print("binder spec:", binder.sequence)
 
 For template-based designs, add `.file(...)` to the same `Complex` before `fold()`.
 
-Antibody-first helper:
+Antibody-first helper (and equivalent explicit setup):
 
 ```python
-from refua import Complex
+from refua import Binder, Complex, Protein
 
-design = Complex.antibody_design(
-    antigen="MSEQNNTEMTFQIQRIYTKDISFEAPNAPHVFQQLAGKYTPEEIRNVLSTLQKAD",
+antigen_seq = "MSEQNNTEMTFQIQRIYTKDISFEAPNAPHVFQQLAGKYTPEEIRNVLSTLQKAD"
+
+# 1) Helper API
+design_from_helper = Complex.antibody_design(
+    antigen=antigen_seq,
     epitope="10..30",
     heavy_cdr_lengths=(12, 10, 14),
     light_cdr_lengths=(10, 9, 9),
 )
-result = design.fold()
+
+# 2) Equivalent explicit Complex + Binder setup
+antigen = Protein(antigen_seq, ids="A", binding_types={"binding": "10..30"})
+heavy = Binder(
+    spec=(
+        "QVQLVESGGGLVQPGGSLRLSCAAS{h1}WYRQAPGKEREWV{h2}"
+        "ISSGGSTYYADSVKGRFTISRDNAKNTLYLQMNSLRAEDTAVYYC{h3}WGQGTLVTVSS"
+    ),
+    template_values={"h1": 12, "h2": 10, "h3": 14},
+    ids="H",
+)
+light = Binder(
+    spec=(
+        "DIQMTQSPSSLSASVGDRVTITCRAS{l1}WYQQKPGKAPKLLIY{l2}"
+        "ASSRATGIPDRFSGSGSGTDFTLTISRLEPEDFAVYYC{l3}FGGGTKVEIK"
+    ),
+    template_values={"l1": 10, "l2": 9, "l3": 9},
+    ids="L",
+)
+design_from_entities = Complex([antigen, heavy, light], name="antibody_design")
+
+# Both represent the same design intent; pick the style you prefer.
+result = design_from_helper.fold()
+# result = design_from_entities.fold()
 print(result.binder_specs)
 print(result.chain_design_summary())
 ```
