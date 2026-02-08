@@ -56,6 +56,22 @@ print("binder spec:", binder.sequence)
 
 For template-based designs, add `.file(...)` to the same `Complex` before `fold()`.
 
+Antibody-first helper:
+
+```python
+from refua import Complex
+
+design = Complex.antibody_design(
+    antigen="MSEQNNTEMTFQIQRIYTKDISFEAPNAPHVFQQLAGKYTPEEIRNVLSTLQKAD",
+    epitope="10..30",
+    heavy_cdr_lengths=(12, 10, 14),
+    light_cdr_lengths=(10, 9, 9),
+)
+result = design.fold()
+print(result.binder_specs)
+print(result.chain_design_summary())
+```
+
 Small molecule properties:
 
 ```python
@@ -94,7 +110,7 @@ boltzgen --help
 
 ## Examples
 
-- `examples/antibody_design.py` shows a minimal antibody design spec with template targets.
+- `examples/antibody_design.py` shows an antibody-first design setup.
 - `examples/protein_ligand_affinity.py` shows a protein-ligand affinity spec.
 - `examples/boltz2_kras_mrtx1133.py` folds KRAS G12D with the MRTX-1133 inhibitor and prints affinity.
 - `examples/boltzgen_peptide_binder.py` shows a peptide binder spec with optional cyclic peptides.

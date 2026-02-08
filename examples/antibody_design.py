@@ -1,111 +1,93 @@
-"""Minimal antibody design example using the unified API."""
+"""Antibody-first design example using the unified API."""
 
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
-from typing import Optional
 
-from refua import Binder, Complex
+from refua import Complex
 
-
-def _resolve_sequence(explicit: Optional[str], length: int, label: str) -> str:
-    """Return an explicit sequence or a numeric design token string.
-
-    Numeric tokens (e.g., "120") denote designed residues.
-    """
-    if explicit:
-        return explicit
-    if length <= 0:
-        msg = f"{label} length must be positive."
-        raise ValueError(msg)
-    return str(length)
+RBD_SEQUENCE = "RVQPTESIVRFPNITNLCPFGEVFNATRFASVYAWNRKRISNCVADYSVLYNSASFSTFKCYGVSPTKLNDLCFTNVYADSFVIRGDEVRQIAPGQTGKIADYNYKLPDDFTGCVIAWNSNNLDSKVGGNYNYLYRLFRKSNLKPFERDISTEIYQAGSTPCNGVEGFNCYFPLQSYGFQPTNGVGYQPYRVVVLSFELLHAPATVCGPKKSTNLVKNKCVNF"
 
 
-def build_design(args: argparse.Namespace):
-    """Create a design for a simple antibody/antigen setup."""
-    antigen_path = Path(args.antigen).expanduser().resolve()
-    design = Complex(name=args.name, base_dir=antigen_path.parent).file(
-        antigen_path,
-        include=[{"chain": {"id": args.antigen_chain}}],
-        binding_types=(
-            [{"chain": {"id": args.antigen_chain, "binding": args.binding_range}}]
-            if args.binding_range
-            else None
-        ),
+def _parse_cdr_lengths(value: str, label: str) -> tuple[int, int, int]:
+    parts = [part.strip() for part in value.split(",") if part.strip()]
+    if len(parts) != 3:
+        raise ValueError(f"{label} must contain exactly three comma-separated values.")
+    lengths = tuple(int(part) for part in parts)
+    if any(length < 1 for length in lengths):
+        raise ValueError(f"{label} values must be >= 1.")
+    cdr1, cdr2, cdr3 = lengths
+    return cdr1, cdr2, cdr3
+
+
+def build_design(args: argparse.Namespace) -> Complex:
+    heavy_cdr_lengths = _parse_cdr_lengths(args.heavy_cdr_lengths, "heavy-cdr-lengths")
+    light_cdr_lengths = _parse_cdr_lengths(args.light_cdr_lengths, "light-cdr-lengths")
+    return Complex.antibody_design(
+        antigen=args.antigen_sequence,
+        epitope=args.epitope,
+        heavy=args.heavy,
+        light=args.light,
+        heavy_cdr_lengths=heavy_cdr_lengths,
+        light_cdr_lengths=light_cdr_lengths,
+        antigen_id=args.antigen_id,
+        heavy_id=args.heavy_id,
+        light_id=args.light_id,
+        name=args.name,
     )
-
-    heavy_seq = _resolve_sequence(args.heavy_seq, args.heavy_length, "Heavy chain")
-    light_seq = _resolve_sequence(args.light_seq, args.light_length, "Light chain")
-
-    design.add(
-        Binder(heavy_seq, ids=args.heavy_id),
-        Binder(light_seq, ids=args.light_id),
-    )
-    return design
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments for the example."""
     parser = argparse.ArgumentParser(
         description="Prepare antibody design inputs with the unified API.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "--antigen",
-        required=True,
-        help="Path to the antigen structure file (e.g., CIF).",
+        "--antigen-sequence",
+        default=RBD_SEQUENCE,
+        help="Antigen amino-acid sequence.",
     )
     parser.add_argument(
-        "--antigen-chain",
-        default="A",
-        help="Antigen chain id to include in the design target.",
+        "--epitope",
+        default="118..190",
+        help="Antigen residue range to mark as binding hotspot.",
     )
     parser.add_argument(
-        "--binding-range",
-        default="10..40",
-        help="Residue range to mark as binding site (set to '' to omit).",
+        "--heavy",
+        default=None,
+        help="Optional heavy-chain binder spec (overrides --heavy-cdr-lengths).",
     )
+    parser.add_argument(
+        "--light",
+        default=None,
+        help="Optional light-chain binder spec (overrides --light-cdr-lengths).",
+    )
+    parser.add_argument(
+        "--heavy-cdr-lengths",
+        default="12,10,14",
+        help="CDR-H1,H2,H3 design lengths.",
+    )
+    parser.add_argument(
+        "--light-cdr-lengths",
+        default="10,9,9",
+        help="CDR-L1,L2,L3 design lengths.",
+    )
+    parser.add_argument("--antigen-id", default="A", help="Antigen chain id.")
     parser.add_argument("--heavy-id", default="H", help="Heavy chain id.")
     parser.add_argument("--light-id", default="L", help="Light chain id.")
-    parser.add_argument(
-        "--heavy-length",
-        type=int,
-        default=120,
-        help="Number of designed residues for the heavy chain.",
-    )
-    parser.add_argument(
-        "--light-length",
-        type=int,
-        default=110,
-        help="Number of designed residues for the light chain.",
-    )
-    parser.add_argument(
-        "--heavy-seq",
-        default=None,
-        help="Optional explicit heavy chain sequence (overrides --heavy-length).",
-    )
-    parser.add_argument(
-        "--light-seq",
-        default=None,
-        help="Optional explicit light chain sequence (overrides --light-length).",
-    )
-    parser.add_argument(
-        "--name",
-        default="antibody_design",
-        help="Spec name for the design job.",
-    )
+    parser.add_argument("--name", default="antibody_design", help="Spec name.")
     return parser.parse_args()
 
 
 def main() -> None:
-    """Run the example and print a brief feature summary."""
     args = parse_args()
     design = build_design(args)
     result = design.fold()
     features = result.features
 
     print("Prepared antibody design inputs:")
+    print(f"- binder_specs: {result.binder_specs}")
+    print(f"- chain_design_summary: {result.chain_design_summary()}")
     if features is not None:
         print(f"- feature_keys: {sorted(features.keys())}")
     else:
