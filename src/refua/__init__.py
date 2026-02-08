@@ -9,7 +9,15 @@ from refua.chem import (
     available_mol_property_groups,
     register_mol_property,
 )
-from refua.unified import Binder, Complex, DNA, RefuaEnv, Protein, RNA
+from refua.unified import (
+    Binder,
+    Complex,
+    DNA,
+    RefuaEnv,
+    Protein,
+    RNA,
+    antibody_framework_specs,
+)
 from refua.boltz.api import Boltz2
 from refua.boltzgen.api import BoltzGen
 
@@ -35,4 +43,5 @@ __all__ = [
     "available_mol_property_groups",
     "download_assets",
     "register_mol_property",
+    "antibody_framework_specs",
 ]
