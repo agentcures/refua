@@ -13,7 +13,7 @@ from refua import (
     Protein,
     antibody_framework_specs,
 )
-from refua.unified import FoldResult
+from refua.unified import FoldResult, _materialize_binder_sequence
 
 
 def test_antibody_framework_specs_default_windows() -> None:
@@ -194,3 +194,66 @@ def test_fold_result_chain_design_summary_uses_trace_tokens() -> None:
     assert summary["L"]["sequence"] == "DC"
     assert summary["L"]["design_residue_count"] == 2
     assert result.binder_specs == {"H": "12", "L": "11"}
+
+
+class _MockFoldComplex:
+    def __init__(self) -> None:
+        self.proteins: list[tuple[tuple[str, ...], str]] = []
+
+    def protein(
+        self,
+        ids: tuple[str, ...],
+        sequence: str,
+        **_kwargs: object,
+    ) -> None:
+        self.proteins.append((tuple(ids), sequence))
+
+    def dna(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+    def rna(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+    def ligand(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+    def fold(self) -> SimpleNamespace:
+        return SimpleNamespace(structure="mock")
+
+
+class _MockBoltz:
+    def __init__(self) -> None:
+        self.last_complex: _MockFoldComplex | None = None
+
+    def fold_complex(self, _name: str) -> _MockFoldComplex:
+        self.last_complex = _MockFoldComplex()
+        return self.last_complex
+
+
+def test_fold_materializes_binders_into_boltz_proteins() -> None:
+    boltz = _MockBoltz()
+    antigen = Protein("M" * 40, ids="A")
+    pair = BinderDesigns.antibody(
+        heavy_cdr_lengths=(4, 3, 5),
+        light_cdr_lengths=(3, 2, 4),
+        heavy_id="H",
+        light_id="L",
+    )
+
+    result = Complex([antigen, *pair], boltz=boltz).fold(run_boltzgen=False)
+
+    assert result.backend == "boltz"
+    assert boltz.last_complex is not None
+    folded_sequences = {ids[0]: seq for ids, seq in boltz.last_complex.proteins}
+    assert folded_sequences["A"] == antigen.sequence
+    assert folded_sequences["H"] == _materialize_binder_sequence(pair.heavy.sequence)
+    assert folded_sequences["L"] == _materialize_binder_sequence(pair.light.sequence)
+
+
+def test_fold_runs_boltz_for_binder_only_complex() -> None:
+    boltz = _MockBoltz()
+    result = Complex([Binder(length=6, ids="P")], boltz=boltz).fold(run_boltzgen=False)
+
+    assert result.backend == "boltz"
+    assert boltz.last_complex is not None
+    assert boltz.last_complex.proteins == [(("P",), "GGGGGG")]

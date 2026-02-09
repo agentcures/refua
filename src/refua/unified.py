@@ -29,6 +29,7 @@ from refua.chem import MolProperties, SmallMolecule
 _BINDING_TYPE_BINDING = 1
 _BINDING_TYPE_NOT_BINDING = 2
 _CANONICAL_TOKEN_LETTERS = "ARNDCQEGHILKMFPSTWYV"
+_BINDER_DESIGN_PLACEHOLDER = "G"
 
 _MOLECULE_TYPE_LABEL = {
     0: "protein",
@@ -870,6 +871,7 @@ class Complex:
                 proteins
                 or dnas
                 or rnas
+                or binders
                 or ligands
                 or self._constraints
                 or self._affinity_requested
@@ -881,7 +883,11 @@ class Complex:
         backends: list[str] = []
 
         if run_boltz:
-            if not proteins and not dnas and not rnas and not ligands:
+            boltz_proteins = list(proteins)
+            if binders:
+                boltz_proteins.extend(_materialize_binders_for_folding(binders))
+
+            if not boltz_proteins and not dnas and not rnas and not ligands:
                 raise ValueError(
                     "Boltz folding requires at least one protein, DNA, RNA, or ligand."
                 )
@@ -889,7 +895,7 @@ class Complex:
             fold_complex = _build_boltz_complex(
                 boltz_model,
                 self.name,
-                proteins,
+                boltz_proteins,
                 dnas,
                 rnas,
                 ligands,
@@ -1135,6 +1141,89 @@ def _binder_sequence_map(
         for chain_id in ids:
             sequences[chain_id] = spec
     return sequences
+
+
+def _materialize_binders_for_folding(
+    binders: Sequence[tuple[Binder, tuple[str, ...]]],
+) -> list[tuple[Protein, tuple[str, ...]]]:
+    proteins: list[tuple[Protein, tuple[str, ...]]] = []
+    for binder, ids in binders:
+        sequence = _materialize_binder_sequence(
+            binder.sequence_spec(),
+            placeholder=_BINDER_DESIGN_PLACEHOLDER,
+        )
+        proteins.append(
+            (
+                Protein(
+                    sequence=sequence,
+                    ids=ids,
+                    binding_types=binder.binding_types,
+                    secondary_structure=binder.secondary_structure,
+                    cyclic=binder.cyclic,
+                ),
+                ids,
+            )
+        )
+    return proteins
+
+
+def _materialize_binder_sequence(
+    spec: str,
+    *,
+    placeholder: str = _BINDER_DESIGN_PLACEHOLDER,
+) -> str:
+    compact = "".join(spec.split())
+    if not compact:
+        raise ValueError("Binder spec rendered an empty sequence.")
+    if len(placeholder) != 1 or not placeholder.isalpha():
+        raise ValueError("Binder materialization placeholder must be one letter.")
+
+    sequence_parts: list[str] = []
+    idx = 0
+
+    while idx < len(compact):
+        char = compact[idx]
+        if char.isalpha():
+            sequence_parts.append(char.upper())
+            idx += 1
+            continue
+        if char.isdigit():
+            start_idx = idx
+            while idx < len(compact) and compact[idx].isdigit():
+                idx += 1
+            minimum = int(compact[start_idx:idx])
+            maximum = minimum
+            if compact[idx : idx + 2] == "..":
+                idx += 2
+                range_start = idx
+                while idx < len(compact) and compact[idx].isdigit():
+                    idx += 1
+                if range_start == idx:
+                    raise ValueError(
+                        "Binder design range is missing an upper bound: " f"{spec!r}",
+                    )
+                maximum = int(compact[range_start:idx])
+            if minimum < 1 or maximum < 1:
+                raise ValueError(
+                    "Binder design lengths must be >= 1 after template rendering.",
+                )
+            if minimum > maximum:
+                raise ValueError(
+                    "Binder design ranges must have increasing bounds in " f"{spec!r}.",
+                )
+            # For ranges we choose a deterministic midpoint so folding inputs are
+            # stable run-to-run while still respecting range bounds.
+            length = minimum if minimum == maximum else (minimum + maximum) // 2
+            sequence_parts.append(placeholder.upper() * length)
+            continue
+        raise ValueError(
+            "Binder spec contains unsupported tokens for Boltz2 folding: " f"{spec!r}.",
+        )
+
+    sequence = "".join(sequence_parts)
+    if not sequence:
+        raise ValueError("Binder spec rendered an empty sequence.")
+    return sequence
 
 
 def _boltz_msa(value: object | None) -> object | None:
