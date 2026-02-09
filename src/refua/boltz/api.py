@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import io
+import importlib.util
 import os
 import pickle
 import tempfile
+import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -51,6 +53,19 @@ from refua.api import (
     normalize_chain_ids,
 )
 
+_CUEQUIVARIANCE_MODULE = "cuequivariance_torch"
+
+
+def _cuequivariance_available() -> bool:
+    return importlib.util.find_spec(_CUEQUIVARIANCE_MODULE) is not None
+
+
+def _is_cuequivariance_import_error(exc: ModuleNotFoundError) -> bool:
+    missing_name = getattr(exc, "name", "") or ""
+    if missing_name.startswith("cuequivariance"):
+        return True
+    return "cuequivariance" in str(exc).lower()
+
 
 def msa_from_a3m(
     text: str,
@@ -85,7 +100,9 @@ def bcif_bytes_from_mmcif(mmcif_text: str) -> bytes:
     for attr in ("as_binary", "as_binary_string"):
         if hasattr(doc, attr):
             data = getattr(doc, attr)()
-            return data if isinstance(data, (bytes, bytearray)) else data.encode("utf-8")
+            return (
+                data if isinstance(data, (bytes, bytearray)) else data.encode("utf-8")
+            )
 
     if hasattr(doc, "write_binary"):
         buffer = io.BytesIO()
@@ -222,7 +239,9 @@ class Protein:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "ids", _normalize_ids(self.ids))
-        object.__setattr__(self, "modifications", _normalize_modifications(self.modifications))
+        object.__setattr__(
+            self, "modifications", _normalize_modifications(self.modifications)
+        )
 
     def to_schema(self, msa_id: str | int) -> dict[str, dict[str, Any]]:
         payload: dict[str, Any] = {
@@ -248,7 +267,9 @@ class DNA:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "ids", _normalize_ids(self.ids))
-        object.__setattr__(self, "modifications", _normalize_modifications(self.modifications))
+        object.__setattr__(
+            self, "modifications", _normalize_modifications(self.modifications)
+        )
 
     def to_schema(self) -> dict[str, dict[str, Any]]:
         payload: dict[str, Any] = {
@@ -273,7 +294,9 @@ class RNA:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "ids", _normalize_ids(self.ids))
-        object.__setattr__(self, "modifications", _normalize_modifications(self.modifications))
+        object.__setattr__(
+            self, "modifications", _normalize_modifications(self.modifications)
+        )
 
     def to_schema(self) -> dict[str, dict[str, Any]]:
         payload: dict[str, Any] = {
@@ -338,7 +361,11 @@ class Template:
             msg = f"Template {self.name} requires threshold when force is enabled."
             raise ValueError(msg)
 
-        chain_ids = list(self.chain_ids) if self.chain_ids is not None else list(query_sequences)
+        chain_ids = (
+            list(self.chain_ids)
+            if self.chain_ids is not None
+            else list(query_sequences)
+        )
         template_chain_ids = (
             list(self.template_chain_ids)
             if self.template_chain_ids is not None
@@ -663,7 +690,10 @@ class Spec:
                 chain_ids.add(chain_id)
 
             if isinstance(chain, Protein):
-                if chain.sequence in seq_to_msa and seq_to_msa[chain.sequence] is not chain.msa:
+                if (
+                    chain.sequence in seq_to_msa
+                    and seq_to_msa[chain.sequence] is not chain.msa
+                ):
                     msg = "Proteins with identical sequences must share the same MSA object."
                     raise ValueError(msg)
                 seq_to_msa[chain.sequence] = chain.msa
@@ -672,7 +702,10 @@ class Spec:
 
         for constraint in self.constraints:
             if isinstance(constraint, Bond):
-                if constraint.atom1.chain not in chain_ids or constraint.atom2.chain not in chain_ids:
+                if (
+                    constraint.atom1.chain not in chain_ids
+                    or constraint.atom2.chain not in chain_ids
+                ):
                     msg = "Bond constraint refers to unknown chain id."
                     raise ValueError(msg)
             elif isinstance(constraint, Pocket):
@@ -684,7 +717,10 @@ class Spec:
                         msg = "Pocket constraint refers to unknown contact chain id."
                         raise ValueError(msg)
             elif isinstance(constraint, Contact):
-                if constraint.token1.chain not in chain_ids or constraint.token2.chain not in chain_ids:
+                if (
+                    constraint.token1.chain not in chain_ids
+                    or constraint.token2.chain not in chain_ids
+                ):
                     msg = "Contact constraint refers to unknown chain id."
                     raise ValueError(msg)
 
@@ -859,7 +895,8 @@ class Pipeline:
                 "compute_symmetries": False,
                 "inference_binder": binder,
                 "inference_pocket": pocket,
-                "compute_constraint_features": binder is not None and pocket is not None,
+                "compute_constraint_features": binder is not None
+                and pocket is not None,
             }
             call_kwargs.update(kwargs)
             features = self.featurizer.process(tokenized, **call_kwargs)
@@ -923,7 +960,10 @@ class Pipeline:
 
     @staticmethod
     def _chain_name_to_id(target: Target) -> dict[str, int]:
-        return {str(chain["name"]): int(chain["asym_id"]) for chain in target.structure.chains}
+        return {
+            str(chain["name"]): int(chain["asym_id"])
+            for chain in target.structure.chains
+        }
 
 
 _DEFAULT_STRUCTURE_PREDICT_ARGS = {
@@ -1310,7 +1350,9 @@ class FoldComplex:
         if affinity_binder is None:
             ligand_ids = _ligand_chain_ids(self._spec)
             if len(ligand_ids) != 1:
-                msg = "Affinity requires exactly one ligand chain or an explicit binder."
+                msg = (
+                    "Affinity requires exactly one ligand chain or an explicit binder."
+                )
                 raise ValueError(msg)
             affinity_binder = ligand_ids[0]
 
@@ -1376,9 +1418,7 @@ class FoldComplex:
         args = self._model._resolve_predict_args(  # noqa: SLF001
             predict_overrides, affinity=False
         )
-        out = self._model._run_model(  # noqa: SLF001
-            self._model.model, batch, **args
-        )
+        out = self._model._run_model(self._model.model, batch, **args)  # noqa: SLF001
 
         best_idx, best_score = _select_best_prediction(out)
         coords = out["sample_atom_coords"][best_idx].detach().cpu().numpy()
@@ -1458,11 +1498,17 @@ class Boltz2:
         predict_args: Mapping[str, Any] | None = None,
         affinity_predict_args: Mapping[str, Any] | None = None,
     ) -> None:
-        self.cache_dir = Path(cache_dir) if cache_dir is not None else _default_cache_dir()
+        self.cache_dir = (
+            Path(cache_dir) if cache_dir is not None else _default_cache_dir()
+        )
         self.cache_dir = self.cache_dir.expanduser()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.auto_download = auto_download
         self.use_kernels = use_kernels
+        if self.use_kernels and not _cuequivariance_available():
+            self._disable_kernels(
+                "cuEquivariance kernels requested but cuequivariance_torch is not installed."
+            )
         self.affinity_mw_correction = affinity_mw_correction
 
         self.predict_args = dict(_DEFAULT_STRUCTURE_PREDICT_ARGS)
@@ -1483,7 +1529,9 @@ class Boltz2:
         default_checkpoint = self.cache_dir / "boltz2_conf.ckpt"
         default_affinity_checkpoint = self.cache_dir / "boltz2_aff.ckpt"
 
-        checkpoint_path = Path(checkpoint) if checkpoint is not None else default_checkpoint
+        checkpoint_path = (
+            Path(checkpoint) if checkpoint is not None else default_checkpoint
+        )
         affinity_checkpoint_path = (
             Path(affinity_checkpoint)
             if affinity_checkpoint is not None
@@ -1531,6 +1579,36 @@ class Boltz2:
         self._affinity_model: Boltz2Model | None = None
 
         torch.set_float32_matmul_precision("highest")
+
+    def _disable_kernels(
+        self,
+        reason: str,
+        *,
+        model: Boltz2Model | None = None,
+    ) -> None:
+        should_warn = self.use_kernels
+        self.use_kernels = False
+        changed_model = False
+        for candidate in (
+            model,
+            getattr(self, "model", None),
+            getattr(self, "_affinity_model", None),
+        ):
+            if candidate is None:
+                continue
+            if hasattr(candidate, "use_kernels"):
+                if bool(getattr(candidate, "use_kernels", False)):
+                    changed_model = True
+                candidate.use_kernels = False
+
+        if not should_warn and not changed_model:
+            return
+
+        warnings.warn(
+            f"{reason} Falling back to use_kernels=False.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     def _model_load_kwargs(self, *, affinity: bool) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
@@ -1614,15 +1692,27 @@ class Boltz2:
         diffusion_samples: int,
         max_parallel_samples: int | None,
     ) -> dict[str, Tensor]:
+        predict_kwargs = dict(
+            recycling_steps=recycling_steps,
+            num_sampling_steps=sampling_steps,
+            diffusion_samples=diffusion_samples,
+            max_parallel_samples=max_parallel_samples,
+            run_confidence_sequentially=True,
+        )
         with torch.inference_mode():
-            return model(
-                batch,
-                recycling_steps=recycling_steps,
-                num_sampling_steps=sampling_steps,
-                diffusion_samples=diffusion_samples,
-                max_parallel_samples=max_parallel_samples,
-                run_confidence_sequentially=True,
-            )
+            try:
+                return model(batch, **predict_kwargs)
+            except ModuleNotFoundError as exc:
+                model_uses_kernels = bool(getattr(model, "use_kernels", False))
+                if (
+                    self.use_kernels or model_uses_kernels
+                ) and _is_cuequivariance_import_error(exc):
+                    self._disable_kernels(
+                        f"Kernel dependency import failed ({exc}).",
+                        model=model,
+                    )
+                    return model(batch, **predict_kwargs)
+                raise
 
     def _get_affinity_model(self) -> Boltz2Model:
         if self._affinity_model is not None:
@@ -1644,6 +1734,8 @@ class Boltz2:
         affinity_model.steering_args = _normalize_steering_args(
             affinity_model.steering_args
         )
+        if not self.use_kernels and hasattr(affinity_model, "use_kernels"):
+            affinity_model.use_kernels = False
         affinity_model.eval()
         affinity_model.to(self.device)
         self._affinity_model = affinity_model
