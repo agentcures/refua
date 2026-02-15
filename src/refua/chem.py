@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import functools
+import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-import re
 from typing import Any
 
 from rdkit import Chem
-from rdkit.Chem import Descriptors, QED
+from rdkit.Chem import Descriptors, FilterCatalog, QED
 from rdkit.Chem.rdchem import Mol
 
 PropertyValue = float | int | tuple[float | int, ...] | None
@@ -46,6 +47,14 @@ _ALIASES: dict[str, str] = {
     "heavy_atoms": "heavy_atom_count",
     "hetero_atoms": "num_heteroatoms",
     "h_erg": "herg",
+    "pains": "pains_alert_count",
+    "brenk": "brenk_alert_count",
+    "nih": "nih_alert_count",
+    "zinc": "zinc_alert_count",
+    "medchem_alerts": "medchem_alert_count",
+    "medchem_total_alerts": "medchem_alert_count",
+    "passes_medchem_filters": "medchem_pass",
+    "medchem_passes": "medchem_pass",
 }
 
 _BASIC_PROPERTIES = {
@@ -198,6 +207,114 @@ _EXTRA_PROPERTIES = (
 
 for _spec in _EXTRA_PROPERTIES:
     _register_property(_spec, allow_existing=True)
+
+
+_MEDCHEM_FILTER_ENUMS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("pains", ("PAINS", "PAINS_A", "PAINS_B", "PAINS_C")),
+    ("brenk", ("BRENK",)),
+    ("nih", ("NIH",)),
+    ("zinc", ("ZINC",)),
+)
+
+
+def _build_medchem_catalog(
+    enum_names: tuple[str, ...]
+) -> FilterCatalog.FilterCatalog | None:
+    catalogs = FilterCatalog.FilterCatalogParams.FilterCatalogs
+    params = FilterCatalog.FilterCatalogParams()
+    added = False
+    for enum_name in enum_names:
+        catalog = getattr(catalogs, enum_name, None)
+        if catalog is None:
+            continue
+        params.AddCatalog(catalog)
+        added = True
+        if enum_name == "PAINS":
+            break
+    if not added:
+        return None
+    return FilterCatalog.FilterCatalog(params)
+
+
+_MEDCHEM_CATALOGS: dict[str, FilterCatalog.FilterCatalog | None] = {
+    name: _build_medchem_catalog(enum_names)
+    for name, enum_names in _MEDCHEM_FILTER_ENUMS
+}
+
+
+def _catalog_alert_count(
+    mol: Mol,
+    catalog: FilterCatalog.FilterCatalog | None,
+) -> int | None:
+    if catalog is None:
+        return None
+    return int(len(catalog.GetMatches(mol)))
+
+
+@functools.lru_cache(maxsize=4096)
+def _medchem_filter_counts_from_smiles(
+    smiles: str,
+) -> tuple[int | None, int | None, int | None, int | None]:
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return None, None, None, None
+    pains = _catalog_alert_count(mol, _MEDCHEM_CATALOGS.get("pains"))
+    brenk = _catalog_alert_count(mol, _MEDCHEM_CATALOGS.get("brenk"))
+    nih = _catalog_alert_count(mol, _MEDCHEM_CATALOGS.get("nih"))
+    zinc = _catalog_alert_count(mol, _MEDCHEM_CATALOGS.get("zinc"))
+    return pains, brenk, nih, zinc
+
+
+def _medchem_filter_metrics(mol: Mol) -> dict[str, int | None]:
+    smiles = Chem.MolToSmiles(mol, canonical=True)
+    pains, brenk, nih, zinc = _medchem_filter_counts_from_smiles(smiles)
+    medchem_alert_count: int | None = None
+    medchem_pass: int | None = None
+    if pains is not None and brenk is not None and nih is not None and zinc is not None:
+        medchem_alert_count = pains + brenk + nih + zinc
+        medchem_pass = int(medchem_alert_count == 0)
+    return {
+        "pains_alert_count": pains,
+        "brenk_alert_count": brenk,
+        "nih_alert_count": nih,
+        "zinc_alert_count": zinc,
+        "medchem_alert_count": medchem_alert_count,
+        "medchem_pass": medchem_pass,
+    }
+
+
+def _medchem_metric_fn(metric_name: str) -> PropertyFn:
+    def _fn(mol: Mol) -> PropertyValue:
+        metrics = _medchem_filter_metrics(mol)
+        return metrics.get(metric_name)
+
+    return _fn
+
+
+def _register_medchem_properties() -> None:
+    for name, description in (
+        ("pains_alert_count", "Number of PAINS filter alerts."),
+        ("brenk_alert_count", "Number of Brenk filter alerts."),
+        ("nih_alert_count", "Number of NIH filter alerts."),
+        ("zinc_alert_count", "Number of ZINC filter alerts."),
+        (
+            "medchem_alert_count",
+            "Total medchem filter alerts across PAINS, Brenk, NIH, and ZINC.",
+        ),
+        ("medchem_pass", "1 if no medchem alerts are present, else 0."),
+    ):
+        _register_property(
+            MolPropertySpec(
+                name=name,
+                fn=_medchem_metric_fn(name),
+                description=description,
+                groups=("medchem", "filters"),
+            ),
+            allow_existing=True,
+        )
+
+
+_register_medchem_properties()
 
 
 def _admet_profile_from_mol(mol: Mol) -> dict[str, Any]:
@@ -402,6 +519,7 @@ class MolProperties:
     def __getattr__(self, name: str) -> Callable[[], PropertyValue]:
         normalized = _normalize_name(name)
         if normalized in _PROPERTY_REGISTRY:
+
             def _call() -> PropertyValue:
                 return self._compute(normalized)
 
