@@ -25,6 +25,7 @@ from refua.boltz.api import (
 )
 from refua.boltzgen.api import BoltzGen, Trace as BoltzGenTrace
 from refua.chem import MolProperties, SmallMolecule
+from refua.protein import ProteinProperties, ProteinPropertyValue
 
 _BINDING_TYPE_BINDING = 1
 _BINDING_TYPE_NOT_BINDING = 2
@@ -116,9 +117,54 @@ class Protein:
     binding_types: str | Mapping[str, Any] | None = None
     secondary_structure: str | Mapping[str, Any] | None = None
     cyclic: bool = False
+    _properties_cache: ProteinProperties | None = field(
+        init=False,
+        repr=False,
+        compare=False,
+        default=None,
+    )
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "modifications", tuple(self.modifications))
+
+    def get(self, name: str) -> ProteinPropertyValue:
+        """Retrieve a computed protein property value."""
+        return self._default_properties().get(name)
+
+    def to_dict(
+        self,
+        *,
+        groups: Iterable[str] | None = None,
+    ) -> dict[str, ProteinPropertyValue]:
+        """Compute registered protein properties and return their values."""
+        return self._default_properties().to_dict(groups=groups)
+
+    def __getitem__(self, name: str) -> ProteinPropertyValue:
+        return self.get(name)
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            msg = f"{type(self).__name__!s} has no attribute {name!r}"
+            raise AttributeError(msg)
+        try:
+            return getattr(self._default_properties(), name)
+        except AttributeError as exc:
+            msg = f"{type(self).__name__!s} has no attribute {name!r}"
+            raise AttributeError(msg) from exc
+
+    def __dir__(self) -> list[str]:
+        return sorted({*super().__dir__(), *dir(self._default_properties())})
+
+    def _default_properties(self) -> ProteinProperties:
+        cached = self._properties_cache
+        if cached is None:
+            cached = ProteinProperties.from_sequence(
+                self.sequence,
+                lazy=True,
+                sanitize=True,
+            )
+            object.__setattr__(self, "_properties_cache", cached)
+        return cached
 
 
 @dataclass(frozen=True, slots=True)

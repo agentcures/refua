@@ -1,6 +1,8 @@
 from importlib.metadata import PackageNotFoundError, version
 
 from refua.api import download_assets
+from refua.boltz.api import Boltz2
+from refua.boltzgen.api import BoltzGen
 from refua.chem import (
     MolProperties,
     SM,
@@ -8,6 +10,12 @@ from refua.chem import (
     available_mol_properties,
     available_mol_property_groups,
     register_mol_property,
+)
+from refua.protein import (
+    ProteinProperties,
+    available_protein_properties,
+    available_protein_property_groups,
+    register_protein_property,
 )
 from refua.unified import (
     AntibodyBinders,
@@ -20,8 +28,6 @@ from refua.unified import (
     RNA,
     antibody_framework_specs,
 )
-from refua.boltz.api import Boltz2
-from refua.boltzgen.api import BoltzGen
 
 try:  # noqa: SIM105
     __version__ = version("refua")
@@ -38,6 +44,7 @@ __all__ = [
     "Complex",
     "DNA",
     "MolProperties",
+    "ProteinProperties",
     "Protein",
     "RefuaEnv",
     "RNA",
@@ -45,7 +52,10 @@ __all__ = [
     "SmallMolecule",
     "available_mol_properties",
     "available_mol_property_groups",
+    "available_protein_properties",
+    "available_protein_property_groups",
     "download_assets",
     "register_mol_property",
+    "register_protein_property",
     "antibody_framework_specs",
 ]
