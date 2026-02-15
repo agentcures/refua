@@ -115,6 +115,16 @@ print(props.to_dict())
 
 Pass `lazy=False` to compute all properties eagerly.
 
+Protein properties:
+
+```python
+from refua import Protein
+
+target = Protein("MSEQNNTEMTFQIQRIYTKDISFEAPNAPHVFQQLAGKYTPEEIRNVLSTLQKAD", ids="A")
+print(target.length(), target.pi(), target.gravy())
+print(target.to_dict(groups=["basic"]))
+```
+
 Model-based ADMET predictions (optional; requires `refua[admet]`):
 
 ```python
