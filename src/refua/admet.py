@@ -483,7 +483,9 @@ def _score_range(
     return (hard_high - val) / span if span > 0.0 else 0.0
 
 
-def _score_max(value: float | int | None, *, ideal_max: float, hard_max: float) -> float:
+def _score_max(
+    value: float | int | None, *, ideal_max: float, hard_max: float
+) -> float:
     val = _safe_float(value)
     if val is None:
         return 0.5
@@ -634,7 +636,9 @@ class AdmetPredictor:
         self._prompts = prompts
         self._task_ids = tuple(available)
         self.missing_task_ids = tuple(missing)
-        self._device_map = device_map if device_map is not None else _default_device_map()
+        self._device_map = (
+            device_map if device_map is not None else _default_device_map()
+        )
 
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         if self._tokenizer.pad_token is None and self._tokenizer.eos_token is not None:
