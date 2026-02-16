@@ -15,6 +15,7 @@ from refua.protein import (
     ProteinProperties,
     available_protein_properties,
     available_protein_property_groups,
+    protein_property_specs,
     register_protein_property,
 )
 from refua.unified import (
@@ -54,6 +55,7 @@ __all__ = [
     "available_mol_property_groups",
     "available_protein_properties",
     "available_protein_property_groups",
+    "protein_property_specs",
     "download_assets",
     "register_mol_property",
     "register_protein_property",

@@ -102,9 +102,33 @@ _POLAR = frozenset({"S", "T", "N", "Q", "C", "Y", "D", "E", "H", "K", "R"})
 _CHARGED = frozenset({"D", "E", "H", "K", "R"})
 _POSITIVE = frozenset({"H", "K", "R"})
 _NEGATIVE = frozenset({"D", "E"})
+_HYDROPHILIC = frozenset({"D", "E", "K", "R", "H", "N", "Q", "S", "T"})
 _TINY = frozenset({"A", "C", "G", "S", "T"})
 _SMALL = frozenset({"A", "C", "D", "G", "N", "P", "S", "T", "V"})
 _SULFUR = frozenset({"C", "M"})
+_PEPTIDE_HYDROPHOBIC = frozenset({"F", "I", "L", "V", "W", "Y"})
+
+_ANTIBODY_MOTIFS: dict[str, re.Pattern[str]] = {
+    "deamidation_high": re.compile(r"N[GS]"),
+    "deamidation_medium": re.compile(r"N[AHNT]"),
+    "deamidation_low": re.compile(r"[STK]N"),
+    "n_glycosylation": re.compile(r"N[^P][ST]"),
+    "aspartate_isomerization": re.compile(r"D[DGHST]"),
+    "fragmentation_high": re.compile(r"DP"),
+    "fragmentation_medium": re.compile(r"TS"),
+    "integrin_binding": re.compile(r"GPR|RGD|RYD|LDV|DGE|KGD|NGR"),
+    "polyreactive": re.compile(r"GGG|GG|RR|VG|VVV|WWW|YY|W.W"),
+    "aggregation_patch": re.compile(r"FHW"),
+    "viscosity_patch": re.compile(r"HYF|HWH"),
+}
+
+_PEPTIDE_MOTIFS: dict[str, re.Pattern[str]] = {
+    "deamidation_hotspot": re.compile(r"N[GSQA]"),
+    "aspartate_cleavage": re.compile(r"D[PGS]"),
+    "n_terminal_cyclization": re.compile(r"^[QN]"),
+    "dpp4_cleavage": re.compile(r"^[PX]?[AP]"),
+    "hydrophobic_patch": re.compile(r"[FILVWY]{3,}"),
+}
 
 
 def _to_snake(name: str) -> str:
@@ -211,6 +235,110 @@ def _fraction_of(
     return float(sum(fractions[residue] for residue in residues))
 
 
+def _count_motif_matches(sequence: str, pattern: re.Pattern[str]) -> int:
+    return sum(1 for _ in pattern.finditer(sequence))
+
+
+def _max_consecutive_identical(sequence: str) -> int:
+    if not sequence:
+        return 0
+    max_run = 1
+    current_run = 1
+    for idx in range(1, len(sequence)):
+        if sequence[idx] == sequence[idx - 1]:
+            current_run += 1
+            max_run = max(max_run, current_run)
+        else:
+            current_run = 1
+    return max_run
+
+
+def _max_consecutive_in_set(sequence: str, residues: frozenset[str]) -> int:
+    max_run = 0
+    current_run = 0
+    for residue in sequence:
+        if residue in residues:
+            current_run += 1
+            max_run = max(max_run, current_run)
+        else:
+            current_run = 0
+    return max_run
+
+
+def _antibody_unpaired_cysteine_count(sequence: str) -> int:
+    cysteine_positions = [idx for idx, residue in enumerate(sequence) if residue == "C"]
+    paired: set[int] = set()
+    for idx in range(len(cysteine_positions) - 1):
+        left = cysteine_positions[idx]
+        right = cysteine_positions[idx + 1]
+        if abs(right - left) in (1, 2):
+            paired.update({left, right})
+    return sum(1 for idx in cysteine_positions if idx not in paired)
+
+
+def _linear_unpaired_cysteine_count(sequence: str) -> int:
+    cysteine_count = sequence.count("C")
+    if cysteine_count % 2 == 1:
+        return cysteine_count
+    return 0
+
+
+def _cyclic_internal_unpaired_cysteine_count(sequence: str) -> int:
+    internal_cysteines = [
+        idx
+        for idx, residue in enumerate(sequence)
+        if residue == "C" and idx not in {0, len(sequence) - 1}
+    ]
+    if len(internal_cysteines) % 2 == 1:
+        return len(internal_cysteines)
+    return 0
+
+
+def _friendly_property_doc(
+    *,
+    requested_name: str,
+    canonical_name: str,
+    description: str,
+    groups: tuple[str, ...],
+) -> str:
+    """Build a user-facing docstring for dynamic protein property accessors."""
+    summary = description.strip()
+    if not summary:
+        summary = f"Value for the `{canonical_name}` protein property."
+    if summary[-1] not in ".!?":
+        summary = f"{summary}."
+
+    doc = [
+        f"Compute the `{canonical_name}` protein property.",
+        "",
+        summary,
+    ]
+    if _to_snake(requested_name) != canonical_name:
+        doc.extend(
+            [
+                "",
+                f"This method name is an alias of `{canonical_name}`.",
+            ]
+        )
+    if groups:
+        doc.extend(
+            [
+                "",
+                f"Groups: {', '.join(groups)}.",
+            ]
+        )
+    doc.extend(
+        [
+            "",
+            "Returns",
+            "-------",
+            "ProteinPropertyValue",
+            "    Computed value for this sequence, or ``None`` when unavailable.",
+        ]
+    )
+    return "\n".join(doc)
+
+
 @functools.lru_cache(maxsize=4096)
 def _sequence_metrics(sequence: str) -> dict[str, ProteinPropertyValue]:
     analysis = ProteinAnalysis(sequence)
@@ -245,6 +373,148 @@ def _sequence_metrics(sequence: str) -> dict[str, ProteinPropertyValue]:
     hydropathy_kd = sum(
         _HYDROPATHY_KD[residue] * fractions[residue] for residue in _CANONICAL_AA
     )
+    deamidation_high_risk_motif_count = _count_motif_matches(
+        sequence,
+        _ANTIBODY_MOTIFS["deamidation_high"],
+    )
+    deamidation_medium_risk_motif_count = _count_motif_matches(
+        sequence,
+        _ANTIBODY_MOTIFS["deamidation_medium"],
+    )
+    deamidation_low_risk_motif_count = _count_motif_matches(
+        sequence,
+        _ANTIBODY_MOTIFS["deamidation_low"],
+    )
+    n_glycosylation_motif_count = _count_motif_matches(
+        sequence,
+        _ANTIBODY_MOTIFS["n_glycosylation"],
+    )
+    aspartate_isomerization_motif_count = _count_motif_matches(
+        sequence,
+        _ANTIBODY_MOTIFS["aspartate_isomerization"],
+    )
+    aspartate_fragmentation_high_risk_motif_count = _count_motif_matches(
+        sequence,
+        _ANTIBODY_MOTIFS["fragmentation_high"],
+    )
+    aspartate_fragmentation_medium_risk_motif_count = _count_motif_matches(
+        sequence,
+        _ANTIBODY_MOTIFS["fragmentation_medium"],
+    )
+    methionine_oxidation_motif_count = sequence.count("M")
+    tryptophan_oxidation_motif_count = sequence.count("W")
+    integrin_binding_motif_count = _count_motif_matches(
+        sequence,
+        _ANTIBODY_MOTIFS["integrin_binding"],
+    )
+    polyreactive_motif_count = _count_motif_matches(
+        sequence,
+        _ANTIBODY_MOTIFS["polyreactive"],
+    )
+    aggregation_patch_motif_count = _count_motif_matches(
+        sequence,
+        _ANTIBODY_MOTIFS["aggregation_patch"],
+    )
+    viscosity_patch_motif_count = _count_motif_matches(
+        sequence,
+        _ANTIBODY_MOTIFS["viscosity_patch"],
+    )
+    unpaired_cysteine_count = _antibody_unpaired_cysteine_count(sequence)
+
+    antibody_liability_motif_count = (
+        deamidation_high_risk_motif_count
+        + deamidation_medium_risk_motif_count
+        + deamidation_low_risk_motif_count
+        + n_glycosylation_motif_count
+        + aspartate_isomerization_motif_count
+        + aspartate_fragmentation_high_risk_motif_count
+        + aspartate_fragmentation_medium_risk_motif_count
+        + methionine_oxidation_motif_count
+        + tryptophan_oxidation_motif_count
+        + integrin_binding_motif_count
+        + polyreactive_motif_count
+        + aggregation_patch_motif_count
+        + viscosity_patch_motif_count
+        + unpaired_cysteine_count
+    )
+    antibody_liability_score = (
+        deamidation_high_risk_motif_count * 10
+        + deamidation_medium_risk_motif_count * 5
+        + deamidation_low_risk_motif_count * 1
+        + n_glycosylation_motif_count * 5
+        + aspartate_isomerization_motif_count * 10
+        + aspartate_fragmentation_high_risk_motif_count * 10
+        + aspartate_fragmentation_medium_risk_motif_count * 5
+        + methionine_oxidation_motif_count * 5
+        + tryptophan_oxidation_motif_count * 10
+        + integrin_binding_motif_count * 10
+        + polyreactive_motif_count * 5
+        + aggregation_patch_motif_count * 5
+        + viscosity_patch_motif_count * 5
+        + unpaired_cysteine_count * 10
+    )
+
+    peptide_deamidation_hotspot_count = _count_motif_matches(
+        sequence,
+        _PEPTIDE_MOTIFS["deamidation_hotspot"],
+    )
+    peptide_aspartate_cleavage_motif_count = _count_motif_matches(
+        sequence,
+        _PEPTIDE_MOTIFS["aspartate_cleavage"],
+    )
+    peptide_n_terminal_cyclization_risk = int(
+        bool(_PEPTIDE_MOTIFS["n_terminal_cyclization"].search(sequence)),
+    )
+    peptide_trypsin_cleavage_site_count = sum(
+        1 for residue in sequence[:-1] if residue in {"K", "R"}
+    )
+    peptide_dpp4_cleavage_motif_present = int(
+        bool(_PEPTIDE_MOTIFS["dpp4_cleavage"].search(sequence)),
+    )
+    peptide_hydrophobic_patch_count = _count_motif_matches(
+        sequence,
+        _PEPTIDE_MOTIFS["hydrophobic_patch"],
+    )
+    peptide_hydrophilic_residue_fraction = _fraction_of(fractions, _HYDROPHILIC)
+    peptide_max_consecutive_identical_residues = _max_consecutive_identical(sequence)
+    peptide_max_consecutive_hydrophobic_residues = _max_consecutive_in_set(
+        sequence,
+        _PEPTIDE_HYDROPHOBIC,
+    )
+    peptide_linear_unpaired_cysteine_count = _linear_unpaired_cysteine_count(sequence)
+    peptide_cyclic_internal_unpaired_cysteine_count = (
+        _cyclic_internal_unpaired_cysteine_count(sequence)
+    )
+    peptide_low_hydrophilic_flag = int(peptide_hydrophilic_residue_fraction < 0.4)
+    peptide_consecutive_identical_flag = int(
+        peptide_max_consecutive_identical_residues > 1,
+    )
+    peptide_long_hydrophobic_run_flag = int(
+        peptide_max_consecutive_hydrophobic_residues > 4,
+    )
+    peptide_linear_liability_score = (
+        peptide_deamidation_hotspot_count * 10
+        + peptide_aspartate_cleavage_motif_count * 10
+        + peptide_n_terminal_cyclization_risk * 5
+        + peptide_trypsin_cleavage_site_count * 10
+        + peptide_dpp4_cleavage_motif_present * 5
+        + methionine_oxidation_motif_count * 5
+        + tryptophan_oxidation_motif_count * 10
+        + peptide_hydrophobic_patch_count * 5
+        + peptide_linear_unpaired_cysteine_count * 10
+    )
+    peptide_cyclic_liability_score = (
+        peptide_deamidation_hotspot_count * 10
+        + peptide_aspartate_cleavage_motif_count * 10
+        + peptide_trypsin_cleavage_site_count * 10
+        + methionine_oxidation_motif_count * 5
+        + tryptophan_oxidation_motif_count * 10
+        + peptide_hydrophobic_patch_count * 5
+        + peptide_cyclic_internal_unpaired_cysteine_count * 10
+        + peptide_low_hydrophilic_flag * 7
+        + peptide_consecutive_identical_flag * 7
+        + peptide_long_hydrophobic_run_flag * 7
+    )
 
     metrics: dict[str, ProteinPropertyValue] = {
         "length": length,
@@ -277,6 +547,52 @@ def _sequence_metrics(sequence: str) -> dict[str, ProteinPropertyValue]:
         "glycine_fraction": fractions["G"],
         "proline_fraction": fractions["P"],
         "cysteine_fraction": fractions["C"],
+        "deamidation_high_risk_motif_count": deamidation_high_risk_motif_count,
+        "deamidation_medium_risk_motif_count": deamidation_medium_risk_motif_count,
+        "deamidation_low_risk_motif_count": deamidation_low_risk_motif_count,
+        "n_glycosylation_motif_count": n_glycosylation_motif_count,
+        "aspartate_isomerization_motif_count": aspartate_isomerization_motif_count,
+        "aspartate_fragmentation_high_risk_motif_count": (
+            aspartate_fragmentation_high_risk_motif_count
+        ),
+        "aspartate_fragmentation_medium_risk_motif_count": (
+            aspartate_fragmentation_medium_risk_motif_count
+        ),
+        "methionine_oxidation_motif_count": methionine_oxidation_motif_count,
+        "tryptophan_oxidation_motif_count": tryptophan_oxidation_motif_count,
+        "integrin_binding_motif_count": integrin_binding_motif_count,
+        "polyreactive_motif_count": polyreactive_motif_count,
+        "aggregation_patch_motif_count": aggregation_patch_motif_count,
+        "viscosity_patch_motif_count": viscosity_patch_motif_count,
+        "unpaired_cysteine_count": unpaired_cysteine_count,
+        "antibody_liability_motif_count": antibody_liability_motif_count,
+        "antibody_liability_score": antibody_liability_score,
+        "peptide_deamidation_hotspot_count": peptide_deamidation_hotspot_count,
+        "peptide_aspartate_cleavage_motif_count": (
+            peptide_aspartate_cleavage_motif_count
+        ),
+        "peptide_n_terminal_cyclization_risk": peptide_n_terminal_cyclization_risk,
+        "peptide_trypsin_cleavage_site_count": peptide_trypsin_cleavage_site_count,
+        "peptide_dpp4_cleavage_motif_present": peptide_dpp4_cleavage_motif_present,
+        "peptide_hydrophobic_patch_count": peptide_hydrophobic_patch_count,
+        "peptide_hydrophilic_residue_fraction": peptide_hydrophilic_residue_fraction,
+        "peptide_max_consecutive_identical_residues": (
+            peptide_max_consecutive_identical_residues
+        ),
+        "peptide_max_consecutive_hydrophobic_residues": (
+            peptide_max_consecutive_hydrophobic_residues
+        ),
+        "peptide_linear_unpaired_cysteine_count": (
+            peptide_linear_unpaired_cysteine_count
+        ),
+        "peptide_cyclic_internal_unpaired_cysteine_count": (
+            peptide_cyclic_internal_unpaired_cysteine_count
+        ),
+        "peptide_low_hydrophilic_flag": peptide_low_hydrophilic_flag,
+        "peptide_consecutive_identical_flag": peptide_consecutive_identical_flag,
+        "peptide_long_hydrophobic_run_flag": peptide_long_hydrophobic_run_flag,
+        "peptide_linear_liability_score": peptide_linear_liability_score,
+        "peptide_cyclic_liability_score": peptide_cyclic_liability_score,
         "flexibility_mean": flexibility_mean,
         "flexibility_min": flexibility_min,
         "flexibility_max": flexibility_max,
@@ -418,6 +734,166 @@ def _register_default_properties() -> None:
         ("glycine_fraction", "Fraction of glycine residues.", ("composition",)),
         ("proline_fraction", "Fraction of proline residues.", ("composition",)),
         ("cysteine_fraction", "Fraction of cysteine residues.", ("composition",)),
+        (
+            "deamidation_high_risk_motif_count",
+            "Count of high-risk deamidation motifs matching N[GS].",
+            ("developability", "liability", "antibody"),
+        ),
+        (
+            "deamidation_medium_risk_motif_count",
+            "Count of medium-risk deamidation motifs matching N[AHNT].",
+            ("developability", "liability", "antibody"),
+        ),
+        (
+            "deamidation_low_risk_motif_count",
+            "Count of low-risk deamidation motifs matching [STK]N.",
+            ("developability", "liability", "antibody"),
+        ),
+        (
+            "n_glycosylation_motif_count",
+            "Count of canonical N-glycosylation sequons matching N[^P][ST].",
+            ("developability", "liability", "antibody"),
+        ),
+        (
+            "aspartate_isomerization_motif_count",
+            "Count of aspartate isomerization-prone motifs matching D[DGHST].",
+            ("developability", "liability", "antibody"),
+        ),
+        (
+            "aspartate_fragmentation_high_risk_motif_count",
+            "Count of high-risk fragmentation motifs matching DP.",
+            ("developability", "liability", "antibody"),
+        ),
+        (
+            "aspartate_fragmentation_medium_risk_motif_count",
+            "Count of medium-risk fragmentation motifs matching TS.",
+            ("developability", "liability", "antibody"),
+        ),
+        (
+            "methionine_oxidation_motif_count",
+            "Count of methionine oxidation-prone sites (M).",
+            ("developability", "liability", "antibody", "peptide"),
+        ),
+        (
+            "tryptophan_oxidation_motif_count",
+            "Count of tryptophan oxidation-prone sites (W).",
+            ("developability", "liability", "antibody", "peptide"),
+        ),
+        (
+            "integrin_binding_motif_count",
+            "Count of integrin-binding motif hits (e.g., RGD, LDV, NGR).",
+            ("developability", "liability", "antibody"),
+        ),
+        (
+            "polyreactive_motif_count",
+            "Count of sequence patterns associated with polyreactivity risk.",
+            ("developability", "liability", "antibody"),
+        ),
+        (
+            "aggregation_patch_motif_count",
+            "Count of motif matches associated with aggregation patch risk (FHW).",
+            ("developability", "liability", "antibody"),
+        ),
+        (
+            "viscosity_patch_motif_count",
+            "Count of motif matches associated with viscosity patch risk (HYF/HWH).",
+            ("developability", "liability", "antibody"),
+        ),
+        (
+            "unpaired_cysteine_count",
+            "Approximate count of cysteines lacking a nearby putative pair.",
+            ("developability", "liability", "antibody", "peptide"),
+        ),
+        (
+            "antibody_liability_motif_count",
+            "Total count across antibody liability motifs and unpaired cysteines.",
+            ("developability", "liability", "antibody"),
+        ),
+        (
+            "antibody_liability_score",
+            "Weighted antibody liability score from sequence motif counts.",
+            ("developability", "liability", "antibody"),
+        ),
+        (
+            "peptide_deamidation_hotspot_count",
+            "Count of peptide deamidation hotspots matching N[GSQA].",
+            ("developability", "liability", "peptide"),
+        ),
+        (
+            "peptide_aspartate_cleavage_motif_count",
+            "Count of peptide acidic cleavage motifs matching D[PGS].",
+            ("developability", "liability", "peptide"),
+        ),
+        (
+            "peptide_n_terminal_cyclization_risk",
+            "1 when the sequence starts with Q or N, indicating N-terminal cyclization risk.",
+            ("developability", "liability", "peptide"),
+        ),
+        (
+            "peptide_trypsin_cleavage_site_count",
+            "Count of internal trypsin cleavage sites (K/R not at C-terminus).",
+            ("developability", "liability", "peptide"),
+        ),
+        (
+            "peptide_dpp4_cleavage_motif_present",
+            "1 when an N-terminal DPP4 cleavage motif (^[PX]?[AP]) is present.",
+            ("developability", "liability", "peptide"),
+        ),
+        (
+            "peptide_hydrophobic_patch_count",
+            "Count of hydrophobic patches with 3+ consecutive FILVWY residues.",
+            ("developability", "liability", "peptide"),
+        ),
+        (
+            "peptide_hydrophilic_residue_fraction",
+            "Fraction of hydrophilic residues (D,E,K,R,H,N,Q,S,T).",
+            ("developability", "liability", "peptide"),
+        ),
+        (
+            "peptide_max_consecutive_identical_residues",
+            "Longest run of consecutive identical residues.",
+            ("developability", "liability", "peptide"),
+        ),
+        (
+            "peptide_max_consecutive_hydrophobic_residues",
+            "Longest run of consecutive hydrophobic residues in FILVWY.",
+            ("developability", "liability", "peptide"),
+        ),
+        (
+            "peptide_linear_unpaired_cysteine_count",
+            "For linear peptides with odd cysteine count, flags all cysteines as potentially unpaired.",
+            ("developability", "liability", "peptide"),
+        ),
+        (
+            "peptide_cyclic_internal_unpaired_cysteine_count",
+            "For cyclic peptides, potential unpaired cysteine count among internal cysteines only.",
+            ("developability", "liability", "peptide"),
+        ),
+        (
+            "peptide_low_hydrophilic_flag",
+            "1 when hydrophilic residue fraction is below 0.40.",
+            ("developability", "liability", "peptide"),
+        ),
+        (
+            "peptide_consecutive_identical_flag",
+            "1 when any consecutive identical run is longer than one residue.",
+            ("developability", "liability", "peptide"),
+        ),
+        (
+            "peptide_long_hydrophobic_run_flag",
+            "1 when the longest FILVWY run exceeds four residues.",
+            ("developability", "liability", "peptide"),
+        ),
+        (
+            "peptide_linear_liability_score",
+            "Weighted linear-peptide liability score from motif and composition flags.",
+            ("developability", "liability", "peptide"),
+        ),
+        (
+            "peptide_cyclic_liability_score",
+            "Weighted cyclic-peptide liability score with cyclic-specific penalties.",
+            ("developability", "liability", "peptide"),
+        ),
     ):
         _register_property(
             ProteinPropertySpec(
@@ -482,12 +958,12 @@ class ProteinProperties:
 
     @property
     def lazy(self) -> bool:
-        """Return whether this builder computes lazily."""
+        """Whether property values are computed on demand."""
         return self._lazy
 
     @property
     def sequence(self) -> str:
-        """Return the normalized protein sequence."""
+        """Normalized amino-acid sequence used for all calculations."""
         return self._sequence
 
     def get(self, name: str) -> ProteinPropertyValue:
@@ -518,10 +994,17 @@ class ProteinProperties:
     def __getattr__(self, name: str) -> Callable[[], ProteinPropertyValue]:
         normalized = _normalize_name(name)
         if normalized in _PROPERTY_REGISTRY:
+            spec = _PROPERTY_REGISTRY[normalized]
 
             def _call() -> ProteinPropertyValue:
                 return self._compute(normalized)
 
+            _call.__doc__ = _friendly_property_doc(
+                requested_name=name,
+                canonical_name=normalized,
+                description=spec.description,
+                groups=spec.groups,
+            )
             return _call
         msg = f"{type(self).__name__!s} has no attribute {name!r}"
         raise AttributeError(msg)

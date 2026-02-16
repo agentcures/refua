@@ -169,6 +169,51 @@ def _descriptor_description(name: str, fn: PropertyFn) -> str:
     return f"RDKit descriptor {name}."
 
 
+def _friendly_property_doc(
+    *,
+    requested_name: str,
+    canonical_name: str,
+    description: str,
+    groups: tuple[str, ...],
+) -> str:
+    """Build a user-facing docstring for dynamic property accessors."""
+    summary = description.strip()
+    if not summary:
+        summary = f"Value for the `{canonical_name}` descriptor."
+    if summary[-1] not in ".!?":
+        summary = f"{summary}."
+
+    doc = [
+        f"Compute the `{canonical_name}` small-molecule property.",
+        "",
+        summary,
+    ]
+    if _to_snake(requested_name) != canonical_name:
+        doc.extend(
+            [
+                "",
+                f"This method name is an alias of `{canonical_name}`.",
+            ]
+        )
+    if groups:
+        doc.extend(
+            [
+                "",
+                f"Groups: {', '.join(groups)}.",
+            ]
+        )
+    doc.extend(
+        [
+            "",
+            "Returns",
+            "-------",
+            "PropertyValue",
+            "    Computed value for this molecule, or ``None`` when unavailable.",
+        ]
+    )
+    return "\n".join(doc)
+
+
 def _register_rdkit_descriptors() -> None:
     for name, fn in Descriptors.descList:
         normalized = _normalize_name(name)
@@ -453,12 +498,12 @@ class MolProperties:
 
     @property
     def lazy(self) -> bool:
-        """Return whether this builder computes lazily."""
+        """Whether property values are computed on demand."""
         return self._lazy
 
     @property
     def mol(self) -> Mol:
-        """Return the underlying RDKit Mol."""
+        """The RDKit molecule used to compute descriptors."""
         return self._mol
 
     def get(self, name: str) -> PropertyValue:
@@ -519,10 +564,17 @@ class MolProperties:
     def __getattr__(self, name: str) -> Callable[[], PropertyValue]:
         normalized = _normalize_name(name)
         if normalized in _PROPERTY_REGISTRY:
+            spec = _PROPERTY_REGISTRY[normalized]
 
             def _call() -> PropertyValue:
                 return self._compute(normalized)
 
+            _call.__doc__ = _friendly_property_doc(
+                requested_name=name,
+                canonical_name=normalized,
+                description=spec.description,
+                groups=spec.groups,
+            )
             return _call
         msg = f"{type(self).__name__!s} has no attribute {name!r}"
         raise AttributeError(msg)
