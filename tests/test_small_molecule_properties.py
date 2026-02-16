@@ -1,4 +1,4 @@
-from refua import available_mol_property_groups, SM
+from refua import available_mol_properties, available_mol_property_groups, SM
 
 
 def test_small_molecule_properties_lazy():
@@ -52,3 +52,17 @@ def test_small_molecule_medchem_properties():
 
 def test_small_molecule_medchem_group_is_registered():
     assert "medchem" in available_mol_property_groups()
+
+
+def test_small_molecule_property_method_docstrings_are_friendly():
+    props = SM("CCO", lazy=True)
+
+    for name in available_mol_properties():
+        doc = getattr(props, name).__doc__
+        assert doc is not None
+        assert doc.startswith(f"Compute the `{name}` small-molecule property.")
+        assert "Returns" in doc
+
+    alias_doc = props.logp.__doc__
+    assert alias_doc is not None
+    assert "alias of `mol_log_p`" in alias_doc
