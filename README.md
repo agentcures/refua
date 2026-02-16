@@ -118,11 +118,13 @@ Pass `lazy=False` to compute all properties eagerly.
 Protein properties:
 
 ```python
-from refua import Protein
+from refua import Protein, protein_property_specs
 
 target = Protein("MSEQNNTEMTFQIQRIYTKDISFEAPNAPHVFQQLAGKYTPEEIRNVLSTLQKAD", ids="A")
 print(target.length(), target.pi(), target.gravy())
+print(target.antibody_liability_score(), target.peptide_linear_liability_score())
 print(target.to_dict(groups=["basic"]))
+print(protein_property_specs()["antibody_liability_score"].description)
 ```
 
 Model-based ADMET predictions (optional; requires `refua[admet]`):
