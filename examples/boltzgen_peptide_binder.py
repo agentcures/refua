@@ -66,9 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--peptide-spec",
         default="12",
-        help=(
-            "Peptide sequence with optional design tokens, e.g. '10C6C3' or '12'."
-        ),
+        help=("Peptide sequence with optional design tokens, e.g. '10C6C3' or '12'."),
     )
     parser.add_argument(
         "--peptide-cyclic",

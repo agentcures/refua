@@ -34,8 +34,7 @@ def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for the example."""
     parser = argparse.ArgumentParser(
         description=(
-            f"Run the official demo-style {PROTEIN_NAME} "
-            f"and {LIGAND_NAME} example."
+            f"Run the official demo-style {PROTEIN_NAME} " f"and {LIGAND_NAME} example."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )

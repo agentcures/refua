@@ -9,7 +9,9 @@ from typing import Optional
 from refua import Binder, Complex
 
 
-def _structure_groups(chain_id: str, primary: str, secondary: str) -> Optional[list[dict]]:
+def _structure_groups(
+    chain_id: str, primary: str, secondary: str
+) -> Optional[list[dict]]:
     """Build structure group specs if any ranges are provided."""
     groups = []
     if primary.strip():

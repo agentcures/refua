@@ -28,7 +28,9 @@ def _parse_token_ref(value: str) -> TokenRef:
 
 def _parse_token_refs(values: str) -> list[TokenRef]:
     """Parse a comma-separated list of token references."""
-    return [_parse_token_ref(item.strip()) for item in values.split(",") if item.strip()]
+    return [
+        _parse_token_ref(item.strip()) for item in values.split(",") if item.strip()
+    ]
 
 
 def _parse_contact(value: str) -> tuple[TokenRef, TokenRef]:
@@ -55,9 +57,7 @@ def build_complex(args: argparse.Namespace):
         Protein(args.protein_sequence, ids=args.protein_id, msa=msa)
     )
     if args.partner_sequence:
-        complex_spec.add(
-            Protein(args.partner_sequence, ids=args.partner_id)
-        )
+        complex_spec.add(Protein(args.partner_sequence, ids=args.partner_id))
 
     ligand = SM(args.ligand_smiles)
     complex_spec.add(ligand)

@@ -9,7 +9,9 @@ from typing import Optional
 from refua import Binder, Complex
 
 
-def _structure_groups(chain_id: str, primary: str, secondary: str, masked: str) -> Optional[list[dict]]:
+def _structure_groups(
+    chain_id: str, primary: str, secondary: str, masked: str
+) -> Optional[list[dict]]:
     """Build structure group specs when ranges are provided."""
     groups = []
     if primary.strip():
@@ -21,13 +23,13 @@ def _structure_groups(chain_id: str, primary: str, secondary: str, masked: str) 
             {"group": {"visibility": 2, "id": chain_id, "res_index": secondary}}
         )
     if masked.strip():
-        groups.append(
-            {"group": {"visibility": 0, "id": chain_id, "res_index": masked}}
-        )
+        groups.append({"group": {"visibility": 0, "id": chain_id, "res_index": masked}})
     return groups or None
 
 
-def _secondary_structure(chain_id: str, helix: str, sheet: str, loop: str) -> Optional[list[dict]]:
+def _secondary_structure(
+    chain_id: str, helix: str, sheet: str, loop: str
+) -> Optional[list[dict]]:
     """Build secondary structure specs for a template chain."""
     spec: dict[str, object] = {"id": chain_id}
     if helix.strip():

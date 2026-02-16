@@ -27,7 +27,9 @@ def _parse_token_ref(value: str) -> TokenRef:
 
 def _parse_token_refs(values: str) -> list[TokenRef]:
     """Parse a comma-separated list of token references."""
-    return [_parse_token_ref(item.strip()) for item in values.split(",") if item.strip()]
+    return [
+        _parse_token_ref(item.strip()) for item in values.split(",") if item.strip()
+    ]
 
 
 def _parse_contact(value: str) -> tuple[TokenRef, TokenRef]:
@@ -120,7 +122,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--name", default="multi_pocket_complex", help="Spec name.")
     parser.add_argument("--chain-a", default="A", help="Chain id for protein A.")
     parser.add_argument("--chain-b", default="B", help="Chain id for protein B.")
-    parser.add_argument("--chain-c", default="C", help="Optional chain id for protein C.")
+    parser.add_argument(
+        "--chain-c", default="C", help="Optional chain id for protein C."
+    )
     parser.add_argument(
         "--sequence-a",
         default="MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ",
