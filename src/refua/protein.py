@@ -40,6 +40,9 @@ _ALIASES: dict[str, str] = {
     "stable": "is_stable",
     "extinction_reduced": "extinction_coefficient_reduced",
     "extinction_oxidized": "extinction_coefficient_oxidized",
+    "ncpr": "net_charge_per_residue_ph_7_4",
+    "fcr": "fraction_charged_residues",
+    "kappa": "charge_patterning_kappa",
 }
 
 _AA_THREE_LETTER: dict[str, str] = {
@@ -107,6 +110,37 @@ _TINY = frozenset({"A", "C", "G", "S", "T"})
 _SMALL = frozenset({"A", "C", "D", "G", "N", "P", "S", "T", "V"})
 _SULFUR = frozenset({"C", "M"})
 _PEPTIDE_HYDROPHOBIC = frozenset({"F", "I", "L", "V", "W", "Y"})
+_CHARGE_NUMERIC: dict[str, int] = {"D": -1, "E": -1, "H": 1, "K": 1, "R": 1}
+_DISORDER_PROMOTING = frozenset({"A", "D", "E", "G", "K", "P", "Q", "R", "S"})
+_ORDER_PROMOTING = frozenset({"C", "F", "I", "L", "N", "V", "W", "Y"})
+
+_BOMAN_RESIDUE_PROPENSITY: dict[str, float] = {
+    "A": 0.17,
+    "C": 0.24,
+    "D": 3.0,
+    "E": 2.68,
+    "F": -2.98,
+    "G": 0.01,
+    "H": 2.06,
+    "I": -3.1,
+    "K": 2.71,
+    "L": -2.05,
+    "M": -1.1,
+    "N": 2.05,
+    "P": -0.66,
+    "Q": 2.36,
+    "R": 2.58,
+    "S": 0.84,
+    "T": 0.52,
+    "V": -1.5,
+    "W": -3.65,
+    "Y": -2.33,
+}
+
+_HYDROPHOBIC_MOMENT_WINDOW = 11
+_HYDROPHOBIC_MOMENT_ANGLE_DEGREES = 100.0
+_LOW_COMPLEXITY_WINDOW = 12
+_LOW_COMPLEXITY_ENTROPY_THRESHOLD = 2.2
 
 _ANTIBODY_MOTIFS: dict[str, re.Pattern[str]] = {
     "deamidation_high": re.compile(r"N[GS]"),
@@ -265,6 +299,18 @@ def _max_consecutive_in_set(sequence: str, residues: frozenset[str]) -> int:
     return max_run
 
 
+def _max_consecutive_true(mask: Iterable[bool]) -> int:
+    max_run = 0
+    current_run = 0
+    for value in mask:
+        if value:
+            current_run += 1
+            max_run = max(max_run, current_run)
+        else:
+            current_run = 0
+    return max_run
+
+
 def _antibody_unpaired_cysteine_count(sequence: str) -> int:
     cysteine_positions = [idx for idx, residue in enumerate(sequence) if residue == "C"]
     paired: set[int] = set()
@@ -292,6 +338,121 @@ def _cyclic_internal_unpaired_cysteine_count(sequence: str) -> int:
     if len(internal_cysteines) % 2 == 1:
         return len(internal_cysteines)
     return 0
+
+
+def _charge_patterning_kappa(sequence: str) -> float:
+    charged_residues = [residue for residue in sequence if residue in _CHARGE_NUMERIC]
+    charged_count = len(charged_residues)
+    if charged_count < 2:
+        return 0.0
+
+    positive_count = sum(
+        1 for residue in charged_residues if _CHARGE_NUMERIC[residue] > 0
+    )
+    negative_count = charged_count - positive_count
+    if positive_count == 0 or negative_count == 0:
+        return 1.0
+
+    same_charge_adjacent = sum(
+        1
+        for idx in range(1, charged_count)
+        if _CHARGE_NUMERIC[charged_residues[idx]]
+        == _CHARGE_NUMERIC[charged_residues[idx - 1]]
+    )
+    observed_same_charge_fraction = same_charge_adjacent / float(charged_count - 1)
+    expected_same_charge_fraction = (
+        positive_count * (positive_count - 1) + negative_count * (negative_count - 1)
+    ) / float(charged_count * (charged_count - 1))
+    denominator = 1.0 - expected_same_charge_fraction
+    if denominator <= 0.0:
+        return 0.0
+
+    kappa = (
+        observed_same_charge_fraction - expected_same_charge_fraction
+    ) / denominator
+    return float(min(1.0, max(0.0, kappa)))
+
+
+def _hydrophobic_moment(segment: str, *, angle_degrees: float) -> float:
+    if not segment:
+        return 0.0
+    angle = math.radians(angle_degrees)
+    x_component = 0.0
+    y_component = 0.0
+    for idx, residue in enumerate(segment):
+        theta = idx * angle
+        hydropathy = _HYDROPATHY_KD[residue]
+        x_component += hydropathy * math.cos(theta)
+        y_component += hydropathy * math.sin(theta)
+    return float(math.hypot(x_component, y_component) / len(segment))
+
+
+def _hydrophobic_moment_profile(
+    sequence: str,
+    *,
+    window: int = _HYDROPHOBIC_MOMENT_WINDOW,
+    angle_degrees: float = _HYDROPHOBIC_MOMENT_ANGLE_DEGREES,
+) -> tuple[float, float]:
+    if not sequence:
+        return 0.0, 0.0
+    if len(sequence) < window:
+        single = _hydrophobic_moment(sequence, angle_degrees=angle_degrees)
+        return single, single
+
+    moments = [
+        _hydrophobic_moment(
+            sequence[start : start + window],
+            angle_degrees=angle_degrees,
+        )
+        for start in range(len(sequence) - window + 1)
+    ]
+    return float(sum(moments) / len(moments)), float(max(moments))
+
+
+def _window_shannon_entropy(segment: str) -> float:
+    counts: dict[str, int] = {}
+    for residue in segment:
+        counts[residue] = counts.get(residue, 0) + 1
+    length = len(segment)
+    return -sum(
+        (count / length) * math.log2(count / length)
+        for count in counts.values()
+        if count > 0
+    )
+
+
+def _low_complexity_profile(
+    sequence: str,
+    *,
+    window: int = _LOW_COMPLEXITY_WINDOW,
+    entropy_threshold: float = _LOW_COMPLEXITY_ENTROPY_THRESHOLD,
+) -> tuple[float, int]:
+    if not sequence:
+        return 0.0, 0
+
+    if len(sequence) < window:
+        low_complexity = _window_shannon_entropy(sequence) <= entropy_threshold
+        if low_complexity:
+            return 1.0, len(sequence)
+        return 0.0, 0
+
+    mask = [False] * len(sequence)
+    for start in range(len(sequence) - window + 1):
+        segment = sequence[start : start + window]
+        if _window_shannon_entropy(segment) <= entropy_threshold:
+            for idx in range(start, start + window):
+                mask[idx] = True
+
+    low_complexity_fraction = sum(mask) / float(len(sequence))
+    max_low_complexity_run = _max_consecutive_true(mask)
+    return float(low_complexity_fraction), max_low_complexity_run
+
+
+def _boman_index(sequence: str) -> float:
+    if not sequence:
+        return 0.0
+    score = sum(_BOMAN_RESIDUE_PROPENSITY[residue] for residue in sequence)
+    return float(score / len(sequence))
 
 
 def _friendly_property_doc(
@@ -367,12 +528,29 @@ def _sequence_metrics(sequence: str) -> dict[str, ProteinPropertyValue]:
         if fraction > 0.0
     )
     instability_index = float(analysis.instability_index())
+    molecular_weight = float(analysis.molecular_weight())
     aliphatic_index = 100.0 * (
         fractions["A"] + 2.9 * fractions["V"] + 3.9 * (fractions["I"] + fractions["L"])
     )
     hydropathy_kd = sum(
         _HYDROPATHY_KD[residue] * fractions[residue] for residue in _CANONICAL_AA
     )
+    net_charge_ph_5_5 = float(analysis.charge_at_pH(5.5))
+    net_charge_ph_7_4 = float(analysis.charge_at_pH(7.4))
+    net_charge_ph_9_0 = float(analysis.charge_at_pH(9.0))
+    net_charge_per_residue_ph_7_4 = net_charge_ph_7_4 / float(length)
+    charged_residue_fraction = _fraction_of(fractions, _CHARGED)
+    fraction_charged_residues = charged_residue_fraction
+    charge_patterning_kappa = _charge_patterning_kappa(sequence)
+    extinction_per_molecular_weight_reduced = float(ext_reduced) / molecular_weight
+    extinction_per_molecular_weight_oxidized = float(ext_oxidized) / molecular_weight
+    hydrophobic_moment_mean, hydrophobic_moment_max = _hydrophobic_moment_profile(
+        sequence,
+    )
+    low_complexity_fraction, max_low_complexity_run = _low_complexity_profile(sequence)
+    disorder_promoting_fraction = _fraction_of(fractions, _DISORDER_PROMOTING)
+    order_promoting_fraction = _fraction_of(fractions, _ORDER_PROMOTING)
+    boman_index = _boman_index(sequence)
     deamidation_high_risk_motif_count = _count_motif_matches(
         sequence,
         _ANTIBODY_MOTIFS["deamidation_high"],
@@ -518,7 +696,7 @@ def _sequence_metrics(sequence: str) -> dict[str, ProteinPropertyValue]:
 
     metrics: dict[str, ProteinPropertyValue] = {
         "length": length,
-        "molecular_weight": float(analysis.molecular_weight()),
+        "molecular_weight": molecular_weight,
         "aromaticity": float(analysis.aromaticity()),
         "instability_index": instability_index,
         "is_stable": int(instability_index < 40.0),
@@ -529,24 +707,38 @@ def _sequence_metrics(sequence: str) -> dict[str, ProteinPropertyValue]:
         "sheet_fraction": float(sheet),
         "extinction_coefficient_reduced": int(ext_reduced),
         "extinction_coefficient_oxidized": int(ext_oxidized),
-        "net_charge_ph_5_5": float(analysis.charge_at_pH(5.5)),
-        "net_charge_ph_7_4": float(analysis.charge_at_pH(7.4)),
-        "net_charge_ph_9_0": float(analysis.charge_at_pH(9.0)),
+        "extinction_per_molecular_weight_reduced": extinction_per_molecular_weight_reduced,
+        "extinction_per_molecular_weight_oxidized": (
+            extinction_per_molecular_weight_oxidized
+        ),
+        "net_charge_ph_5_5": net_charge_ph_5_5,
+        "net_charge_ph_7_4": net_charge_ph_7_4,
+        "net_charge_ph_9_0": net_charge_ph_9_0,
+        "net_charge_per_residue_ph_7_4": net_charge_per_residue_ph_7_4,
         "aliphatic_index": float(aliphatic_index),
         "shannon_entropy": float(shannon_entropy),
         "hydropathy_kyte_doolittle": float(hydropathy_kd),
+        "hydrophobic_moment_mean": hydrophobic_moment_mean,
+        "hydrophobic_moment_max": hydrophobic_moment_max,
         "hydrophobic_residue_fraction": _fraction_of(fractions, _HYDROPHOBIC),
         "polar_residue_fraction": _fraction_of(fractions, _POLAR),
         "nonpolar_residue_fraction": 1.0 - _fraction_of(fractions, _POLAR),
-        "charged_residue_fraction": _fraction_of(fractions, _CHARGED),
+        "charged_residue_fraction": charged_residue_fraction,
+        "fraction_charged_residues": fraction_charged_residues,
+        "charge_patterning_kappa": charge_patterning_kappa,
         "positive_residue_fraction": _fraction_of(fractions, _POSITIVE),
         "negative_residue_fraction": _fraction_of(fractions, _NEGATIVE),
+        "disorder_promoting_fraction": disorder_promoting_fraction,
+        "order_promoting_fraction": order_promoting_fraction,
         "tiny_residue_fraction": _fraction_of(fractions, _TINY),
         "small_residue_fraction": _fraction_of(fractions, _SMALL),
         "sulfur_residue_fraction": _fraction_of(fractions, _SULFUR),
         "glycine_fraction": fractions["G"],
         "proline_fraction": fractions["P"],
         "cysteine_fraction": fractions["C"],
+        "low_complexity_fraction": low_complexity_fraction,
+        "max_low_complexity_run": max_low_complexity_run,
+        "boman_index": boman_index,
         "deamidation_high_risk_motif_count": deamidation_high_risk_motif_count,
         "deamidation_medium_risk_motif_count": deamidation_medium_risk_motif_count,
         "deamidation_low_risk_motif_count": deamidation_low_risk_motif_count,
@@ -627,6 +819,11 @@ def _register_default_properties() -> None:
             ("basic", "charge"),
         ),
         ("net_charge_ph_9_0", "Estimated net charge at pH 9.0.", ("charge",)),
+        (
+            "net_charge_per_residue_ph_7_4",
+            "Estimated net charge at pH 7.4 normalized by sequence length (NCPR).",
+            ("charge", "composition", "idr"),
+        ),
         ("aromaticity", "Fraction of aromatic residues.", ("basic", "composition")),
         (
             "instability_index",
@@ -655,6 +852,16 @@ def _register_default_properties() -> None:
             ("biophysical", "composition"),
         ),
         (
+            "hydrophobic_moment_mean",
+            "Mean windowed hydrophobic moment (11 aa, 100-degree rotation).",
+            ("biophysical", "amphipathicity"),
+        ),
+        (
+            "hydrophobic_moment_max",
+            "Maximum windowed hydrophobic moment (11 aa, 100-degree rotation).",
+            ("biophysical", "amphipathicity"),
+        ),
+        (
             "helix_fraction",
             "Predicted fraction in alpha-helical secondary structure.",
             ("secondary_structure",),
@@ -677,6 +884,16 @@ def _register_default_properties() -> None:
         (
             "extinction_coefficient_oxidized",
             "Molar extinction coefficient assuming cystines from disulfides.",
+            ("absorbance",),
+        ),
+        (
+            "extinction_per_molecular_weight_reduced",
+            "Reduced-cysteine extinction coefficient normalized by molecular weight.",
+            ("absorbance",),
+        ),
+        (
+            "extinction_per_molecular_weight_oxidized",
+            "Oxidized-cysteine extinction coefficient normalized by molecular weight.",
             ("absorbance",),
         ),
         (
@@ -707,6 +924,16 @@ def _register_default_properties() -> None:
             ("composition",),
         ),
         (
+            "fraction_charged_residues",
+            "Fraction of charged residues (FCR; D,E,H,K,R).",
+            ("composition", "charge", "idr"),
+        ),
+        (
+            "charge_patterning_kappa",
+            "Normalized charge clustering score over charged residues (0 mixed, 1 segregated).",
+            ("composition", "charge", "idr"),
+        ),
+        (
             "positive_residue_fraction",
             "Fraction of positively charged residues (H,K,R).",
             ("composition", "charge"),
@@ -734,6 +961,31 @@ def _register_default_properties() -> None:
         ("glycine_fraction", "Fraction of glycine residues.", ("composition",)),
         ("proline_fraction", "Fraction of proline residues.", ("composition",)),
         ("cysteine_fraction", "Fraction of cysteine residues.", ("composition",)),
+        (
+            "disorder_promoting_fraction",
+            "Fraction of residues in a disorder-promoting set (A,D,E,G,K,P,Q,R,S).",
+            ("composition", "idr"),
+        ),
+        (
+            "order_promoting_fraction",
+            "Fraction of residues in an order-promoting set (C,F,I,L,N,V,W,Y).",
+            ("composition", "idr"),
+        ),
+        (
+            "low_complexity_fraction",
+            "Fraction of residues in low-complexity windows (entropy <= 2.2 over 12 aa).",
+            ("composition", "low_complexity", "idr"),
+        ),
+        (
+            "max_low_complexity_run",
+            "Longest contiguous run of residues in low-complexity windows.",
+            ("composition", "low_complexity", "idr"),
+        ),
+        (
+            "boman_index",
+            "Boman index proxy from residue binding propensity values.",
+            ("biophysical", "developability", "peptide"),
+        ),
         (
             "deamidation_high_risk_motif_count",
             "Count of high-risk deamidation motifs matching N[GS].",

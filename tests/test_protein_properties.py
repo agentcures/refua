@@ -104,3 +104,50 @@ def test_protein_developability_properties_are_available_as_methods():
     assert int(cyclic_peptide.peptide_consecutive_identical_flag()) == 1
     assert int(cyclic_peptide.peptide_long_hydrophobic_run_flag()) == 1
     assert int(cyclic_peptide.peptide_cyclic_liability_score()) > 0
+
+
+def test_protein_new_charge_patterning_properties():
+    sequence = "KKKKEEEERRRRDDDDAAAAGGGGPPPP"
+    protein = Protein(sequence)
+
+    assert protein.fcr() == protein.fraction_charged_residues()
+    assert protein.kappa() == protein.charge_patterning_kappa()
+    assert protein.ncpr() == protein.net_charge_per_residue_ph_7_4()
+    assert protein.fraction_charged_residues() == protein.charged_residue_fraction()
+
+    ncpr = float(protein.net_charge_per_residue_ph_7_4())
+    expected_ncpr = float(protein.net_charge_ph_7_4()) / len(sequence)
+    assert abs(ncpr - expected_ncpr) < 1e-9
+    assert 0.0 <= float(protein.charge_patterning_kappa()) <= 1.0
+
+    idr_values = protein.to_dict(groups=["idr"])
+    assert "fraction_charged_residues" in idr_values
+    assert "charge_patterning_kappa" in idr_values
+    assert "net_charge_per_residue_ph_7_4" in idr_values
+    assert "low_complexity_fraction" in idr_values
+    assert "max_low_complexity_run" in idr_values
+
+
+def test_protein_new_biophysical_properties():
+    sequence = "MKWVTFISLLFLFSSAYSRGVFRRDTHKSEIAHRFKDLGE"
+    protein = Protein(sequence)
+
+    assert float(protein.extinction_per_molecular_weight_reduced()) >= 0.0
+    assert float(protein.extinction_per_molecular_weight_oxidized()) >= 0.0
+
+    hydrophobic_moment_mean = float(protein.hydrophobic_moment_mean())
+    hydrophobic_moment_max = float(protein.hydrophobic_moment_max())
+    assert hydrophobic_moment_mean >= 0.0
+    assert hydrophobic_moment_max >= hydrophobic_moment_mean
+
+    low_complexity_fraction = float(protein.low_complexity_fraction())
+    max_low_complexity_run = int(protein.max_low_complexity_run())
+    assert 0.0 <= low_complexity_fraction <= 1.0
+    assert 0 <= max_low_complexity_run <= len(sequence)
+
+    disorder_promoting_fraction = float(protein.disorder_promoting_fraction())
+    order_promoting_fraction = float(protein.order_promoting_fraction())
+    assert 0.0 <= disorder_promoting_fraction <= 1.0
+    assert 0.0 <= order_promoting_fraction <= 1.0
+
+    assert isinstance(float(protein.boman_index()), float)
