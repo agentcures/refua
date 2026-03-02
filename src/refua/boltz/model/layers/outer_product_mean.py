@@ -1,4 +1,4 @@
-import boltz.model.layers.initialize as init
+from . import initialize as init
 import torch
 from torch import Tensor, nn
 
