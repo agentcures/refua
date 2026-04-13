@@ -257,6 +257,12 @@ class TotalLength:
     min: int
     max: int
 
+    def __post_init__(self) -> None:
+        if self.min < 0 or self.max < 0:
+            raise ValueError("Total length bounds must be non-negative.")
+        if self.min > self.max:
+            raise ValueError("Total length minimum must be <= maximum.")
+
     def to_schema(self) -> dict[str, dict[str, int]]:
         return {"total_len": {"min": self.min, "max": self.max}}
 
@@ -403,8 +409,7 @@ class Spec:
 
     def to_schema(self) -> dict[str, Any]:
         """Return a BoltzGen-compatible schema dictionary."""
-        if not self.entities:
-            raise ValueError("Spec requires at least one entity.")
+        self._validate()
 
         schema: dict[str, Any] = {
             "entities": [entity.to_schema() for entity in self.entities]
@@ -412,6 +417,39 @@ class Spec:
         if self.constraints:
             schema["constraints"] = [constraint.to_schema() for constraint in self.constraints]
         return schema
+
+    def _validate(self) -> None:
+        if not self.entities:
+            raise ValueError("Spec requires at least one entity.")
+
+        known_chain_ids: set[str] = set()
+        has_unresolved_entities = False
+
+        for entity in self.entities:
+            if isinstance(entity, (Protein, DNA, RNA, Ligand)):
+                entity_ids = normalize_chain_ids(entity.ids)
+                for chain_id in entity_ids:
+                    if chain_id in known_chain_ids:
+                        msg = f"Duplicate chain id {chain_id} in spec."
+                        raise ValueError(msg)
+                    known_chain_ids.add(chain_id)
+                continue
+
+            if isinstance(entity, (File, RawEntity)):
+                has_unresolved_entities = True
+
+        for constraint in self.constraints:
+            if not isinstance(constraint, Bond):
+                continue
+
+            missing = tuple(
+                chain_id
+                for chain_id in (constraint.atom1.chain, constraint.atom2.chain)
+                if chain_id not in known_chain_ids
+            )
+            if missing and not has_unresolved_entities:
+                msg = "Bond constraint refers to unknown chain id."
+                raise ValueError(msg)
 
 
 @dataclass(frozen=True)
