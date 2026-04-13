@@ -103,6 +103,37 @@ def _format_ids(ids: ChainIds) -> str | list[str]:
     return list(normalized)
 
 
+def _propagate_design_chain_mask(
+    asym_id: np.ndarray,
+    bonds: np.ndarray,
+    design_mask: np.ndarray,
+) -> np.ndarray:
+    design_chains = {int(chain_id) for chain_id in np.unique(asym_id[design_mask])}
+    if not design_chains:
+        return np.zeros_like(design_mask, dtype=bool)
+
+    adjacency: dict[int, set[int]] = {}
+    for i, j, *_ in bonds:
+        chain_i = int(asym_id[i])
+        chain_j = int(asym_id[j])
+        if chain_i == chain_j:
+            continue
+        adjacency.setdefault(chain_i, set()).add(chain_j)
+        adjacency.setdefault(chain_j, set()).add(chain_i)
+
+    reachable = set(design_chains)
+    stack = list(design_chains)
+    while stack:
+        chain_id = stack.pop()
+        for neighbor in adjacency.get(chain_id, ()):
+            if neighbor in reachable:
+                continue
+            reachable.add(neighbor)
+            stack.append(neighbor)
+
+    return np.isin(asym_id, tuple(reachable)).astype(bool)
+
+
 @dataclass(frozen=True, slots=True)
 class Protein:
     """Protein chain specification."""
@@ -543,16 +574,11 @@ class Pipeline:
 
         chain_design_mask = tokenized.tokens["design_mask"].astype(bool)
         asym_id = tokenized.tokens["asym_id"]
-        while True:
-            design_chains = np.unique(asym_id[chain_design_mask])
-            chain_propagated = np.isin(asym_id, design_chains)
-            for i, j, _ in tokenized.bonds:
-                if chain_propagated[i] or chain_propagated[j]:
-                    chain_propagated[i] = True
-                    chain_propagated[j] = True
-            if np.equal(chain_propagated, chain_design_mask).all():
-                break
-            chain_design_mask = chain_propagated.astype(bool)
+        chain_design_mask = _propagate_design_chain_mask(
+            asym_id,
+            tokenized.bonds,
+            chain_design_mask,
+        )
 
         ss_type = design_info.res_ss_types[token_to_res]
         return tokenized, chain_design_mask, ss_type

@@ -7,7 +7,7 @@ import pytest
 from refua.api import _download_hf_artifact
 from refua.boltz.api import Pipeline, Spec
 from refua.boltz.data.types import MSA
-from refua.boltzgen.api import _resolve_moldir
+from refua.boltzgen.api import _propagate_design_chain_mask, _resolve_moldir
 from refua.boltzgen.api import Spec as DesignSpec
 
 
@@ -129,3 +129,19 @@ def test_boltz_spec_rejects_conflicting_msa_content_for_same_sequence() -> None:
             "ACDE",
             msa=msa_b,
         ).to_schema()
+
+
+def test_boltzgen_design_mask_propagates_across_chain_bond_graph() -> None:
+    asym_id = np.array([0, 0, 1, 1, 2, 2], dtype=np.int64)
+    bonds = np.array(
+        [
+            (1, 2, 1),
+            (3, 4, 1),
+        ],
+        dtype=np.int64,
+    )
+    design_mask = np.array([True, True, False, False, False, False])
+
+    propagated = _propagate_design_chain_mask(asym_id, bonds, design_mask)
+
+    assert propagated.tolist() == [True, True, True, True, True, True]
