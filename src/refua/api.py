@@ -190,8 +190,11 @@ def _download_hf_artifact(
     if skip_existing:
         try:
             return _download(local_files_only=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            if _looks_like_hf_cache_miss(exc):
+                pass
+            else:
+                raise
 
     return _download(local_files_only=False)
 
@@ -210,6 +213,10 @@ def _looks_like_hf_auth_error(exc: Exception) -> bool:
         token in message
         for token in ("unauthorized", "forbidden", "gated repo", "access denied")
     )
+
+
+def _looks_like_hf_cache_miss(exc: Exception) -> bool:
+    return type(exc).__name__ in {"LocalEntryNotFoundError"}
 
 
 def _download_txgemma_repo(
@@ -239,8 +246,11 @@ def _download_txgemma_repo(
     if skip_existing:
         try:
             return _download(local_files_only=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            if _looks_like_hf_cache_miss(exc):
+                pass
+            else:
+                raise
 
     try:
         resolved_path = _download(local_files_only=False)

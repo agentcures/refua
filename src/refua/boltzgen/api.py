@@ -23,6 +23,8 @@ from refua.api import (
     AtomRef,
     Bond,
     ChainIds,
+    _looks_like_hf_auth_error,
+    _looks_like_hf_cache_miss,
     as_atom_ref,
     normalize_chain_ids,
 )
@@ -71,9 +73,19 @@ def _resolve_moldir(
                     local_files_only=not auto_download,
                 )
             except Exception as exc:
-                raise FileNotFoundError(
-                    "Default moldir not found. Set BOLTZGEN_MOLDIR or pass mol_dir explicitly."
-                ) from exc
+                if _looks_like_hf_auth_error(exc):
+                    msg = (
+                        "Default moldir download failed due to Hugging Face authentication. "
+                        "Set HF_TOKEN or pass token=..., and ensure you can access "
+                        f"{repo_id}."
+                    )
+                    raise RuntimeError(msg) from exc
+                if _looks_like_hf_cache_miss(exc):
+                    raise FileNotFoundError(
+                        "Default moldir not found in the local Hugging Face cache. "
+                        "Enable auto_download, set BOLTZGEN_MOLDIR, or pass mol_dir explicitly."
+                    ) from exc
+                raise
             resolved = Path(resolved_path)
         else:
             resolved = Path(moldir_str).expanduser()
