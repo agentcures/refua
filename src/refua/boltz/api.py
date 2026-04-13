@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import importlib.util
+import hashlib
 import os
 import pickle
 import tempfile
@@ -151,6 +152,26 @@ def _normalize_modifications(
             position, ccd = mod
             normalized.append(Modification(position=position, ccd=ccd))
     return tuple(normalized)
+
+
+def _msa_identity_key(msa: MSA | None) -> str | None:
+    if msa is None:
+        return None
+
+    explicit_id = getattr(msa, "msa_id", None)
+    if explicit_id is None:
+        explicit_id = getattr(msa, "refua_msa_id", None)
+    if explicit_id is not None:
+        return f"explicit:{explicit_id}"
+
+    digest = hashlib.sha1()
+    for field_name in ("sequences", "deletions", "residues"):
+        array = np.ascontiguousarray(getattr(msa, field_name))
+        digest.update(field_name.encode("utf-8"))
+        digest.update(str(array.dtype).encode("utf-8"))
+        digest.update(np.asarray(array.shape, dtype=np.int64).tobytes())
+        digest.update(array.tobytes())
+    return f"content:{digest.hexdigest()}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -650,7 +671,7 @@ class Spec:
 
     def to_schema(self) -> dict[str, Any]:
         self._validate()
-        msa_ids: dict[int, str] = {}
+        msa_ids: dict[str, str] = {}
         msa_counter = 0
 
         entries: list[dict[str, Any]] = []
@@ -658,7 +679,10 @@ class Spec:
             if isinstance(chain, Protein):
                 msa_id: str | int = -1
                 if chain.msa is not None:
-                    key = id(chain.msa)
+                    key = _msa_identity_key(chain.msa)
+                    if key is None:
+                        msg = "MSA identity key unexpectedly missing."
+                        raise RuntimeError(msg)
                     if key not in msa_ids:
                         msa_ids[key] = f"in_memory:{msa_counter}"
                         msa_counter += 1
@@ -679,7 +703,7 @@ class Spec:
             raise ValueError("Spec requires at least one chain.")
 
         chain_ids: set[str] = set()
-        seq_to_msa: dict[str, MSA | None] = {}
+        seq_to_msa: dict[str, str | None] = {}
         ligand_ids: set[str] = set()
 
         for chain in self.sequences:
@@ -690,13 +714,17 @@ class Spec:
                 chain_ids.add(chain_id)
 
             if isinstance(chain, Protein):
+                msa_key = _msa_identity_key(chain.msa)
                 if (
                     chain.sequence in seq_to_msa
-                    and seq_to_msa[chain.sequence] is not chain.msa
+                    and seq_to_msa[chain.sequence] != msa_key
                 ):
-                    msg = "Proteins with identical sequences must share the same MSA object."
+                    msg = (
+                        "Proteins with identical sequences must share equivalent MSA "
+                        "content."
+                    )
                     raise ValueError(msg)
-                seq_to_msa[chain.sequence] = chain.msa
+                seq_to_msa[chain.sequence] = msa_key
             if isinstance(chain, Ligand):
                 ligand_ids.update(chain.ids)
 

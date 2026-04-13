@@ -1,10 +1,12 @@
 import sys
 from types import ModuleType
 
+import numpy as np
 import pytest
 
 from refua.api import _download_hf_artifact
 from refua.boltz.api import Pipeline, Spec
+from refua.boltz.data.types import MSA
 from refua.boltzgen.api import _resolve_moldir
 from refua.boltzgen.api import Spec as DesignSpec
 
@@ -85,3 +87,45 @@ def test_resolve_moldir_reports_auth_failures_clearly(
             "huggingface:org/repo:mols.zip",
             auto_download=True,
         )
+
+
+def test_boltz_spec_deduplicates_equivalent_msa_content() -> None:
+    msa_a = MSA(
+        sequences=np.array(["ACDE"], dtype="<U4"),
+        deletions=np.zeros((1, 4), dtype=np.int64),
+        residues=np.array([[0, 1, 2, 3]], dtype=np.int64),
+    )
+    msa_b = MSA(
+        sequences=np.array(["ACDE"], dtype="<U4"),
+        deletions=np.zeros((1, 4), dtype=np.int64),
+        residues=np.array([[0, 1, 2, 3]], dtype=np.int64),
+    )
+
+    schema = Spec("shared_msa").protein("A", "ACDE", msa=msa_a).protein(
+        "B",
+        "ACDE",
+        msa=msa_b,
+    ).to_schema()
+
+    msa_ids = [entry["protein"]["msa"] for entry in schema["sequences"]]
+    assert msa_ids == ["in_memory:0", "in_memory:0"]
+
+
+def test_boltz_spec_rejects_conflicting_msa_content_for_same_sequence() -> None:
+    msa_a = MSA(
+        sequences=np.array(["ACDE"], dtype="<U4"),
+        deletions=np.zeros((1, 4), dtype=np.int64),
+        residues=np.array([[0, 1, 2, 3]], dtype=np.int64),
+    )
+    msa_b = MSA(
+        sequences=np.array(["ACDE"], dtype="<U4"),
+        deletions=np.zeros((1, 4), dtype=np.int64),
+        residues=np.array([[3, 2, 1, 0]], dtype=np.int64),
+    )
+
+    with pytest.raises(ValueError, match="equivalent MSA content"):
+        Spec("conflicting_msa").protein("A", "ACDE", msa=msa_a).protein(
+            "B",
+            "ACDE",
+            msa=msa_b,
+        ).to_schema()
