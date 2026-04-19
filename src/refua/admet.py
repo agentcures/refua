@@ -701,11 +701,20 @@ class AdmetPredictor:
         predictions: dict[str, float] = {}
         raw_outputs: dict[str, str] = {}
 
-        for task_id in self._task_ids:
-            prompt = self._prompts[task_id].replace(self._prompt_token, smiles)
-            output = self._pipe(prompt, max_new_tokens=max_new_tokens, do_sample=False)[
-                0
-            ]
+        prompts = [
+            self._prompts[task_id].replace(self._prompt_token, smiles)
+            for task_id in self._task_ids
+        ]
+        outputs = self._pipe(
+            prompts,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            batch_size=len(prompts),
+        )
+
+        for task_id, prompt, output in zip(self._task_ids, prompts, outputs):
+            if isinstance(output, list):
+                output = output[0] if output else {}
             generated = output.get("generated_text", "")
             raw_outputs[task_id] = generated
             predictions[task_id] = _extract_prediction(generated, prompt)

@@ -13,6 +13,7 @@ from refua import (
     Protein,
     antibody_framework_specs,
 )
+import refua.unified as unified_module
 from refua.unified import FoldResult, _materialize_binder_sequence
 
 
@@ -257,3 +258,39 @@ def test_fold_runs_boltz_for_binder_only_complex() -> None:
     assert result.backend == "boltz"
     assert boltz.last_complex is not None
     assert boltz.last_complex.proteins == [(("P",), "GGGGGG")]
+
+
+def test_complex_reuses_shared_default_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"boltz": 0, "boltzgen": 0}
+
+    class DummyBoltz:
+        pass
+
+    class DummyBoltzGen:
+        pass
+
+    def build_boltz() -> DummyBoltz:
+        calls["boltz"] += 1
+        return DummyBoltz()
+
+    def build_boltzgen() -> DummyBoltzGen:
+        calls["boltzgen"] += 1
+        return DummyBoltzGen()
+
+    unified_module._DEFAULT_MODEL_INSTANCES.clear()
+    monkeypatch.setattr(unified_module, "Boltz2", build_boltz)
+    monkeypatch.setattr(unified_module, "BoltzGen", build_boltzgen)
+
+    first = Complex()
+    second = Complex()
+
+    try:
+        assert first._resolve_boltz_model(None) is second._resolve_boltz_model(None)
+        assert first._resolve_boltzgen_model(None) is second._resolve_boltzgen_model(
+            None
+        )
+        assert calls == {"boltz": 1, "boltzgen": 1}
+    finally:
+        unified_module._DEFAULT_MODEL_INSTANCES.clear()

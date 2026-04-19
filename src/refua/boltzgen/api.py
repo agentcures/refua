@@ -3,6 +3,7 @@ from __future__ import annotations
 """In-memory API for BoltzGen design parsing and feature preparation."""
 
 import os
+from collections import ChainMap
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -458,7 +459,9 @@ class Spec:
             "entities": [entity.to_schema() for entity in self.entities]
         }
         if self.constraints:
-            schema["constraints"] = [constraint.to_schema() for constraint in self.constraints]
+            schema["constraints"] = [
+                constraint.to_schema() for constraint in self.constraints
+            ]
         return schema
 
     def _validate(self) -> None:
@@ -547,9 +550,7 @@ class Pipeline:
         """Parse a Spec into a Target using the BoltzGen schema parser."""
         mol_dir_value = Path(mol_dir) if mol_dir is not None else self.mol_dir
         mol_dir_value = mol_dir_value or Path()
-        mols_map = dict(self.molecules)
-        if mols is not None:
-            mols_map.update(mols)
+        mols_map = self.molecules if mols is None else {**self.molecules, **mols}
 
         base_path = Path(base_dir) if base_dir is not None else spec.base_dir
         return self.parser.parse_boltzgen_schema(
@@ -560,7 +561,9 @@ class Pipeline:
             base_file_path=base_path,
         )
 
-    def tokenize(self, target: Target) -> tuple[Tokenized, np.ndarray | None, np.ndarray | None]:
+    def tokenize(
+        self, target: Target
+    ) -> tuple[Tokenized, np.ndarray | None, np.ndarray | None]:
         """Tokenize a Target and derive design/secondary-structure masks."""
         tokenized = self.tokenizer.tokenize(target.structure)
         if target.design_info is None:
@@ -570,7 +573,9 @@ class Pipeline:
         design_info = target.design_info
         tokenized.tokens["design_mask"] = design_info.res_design_mask[token_to_res]
         tokenized.tokens["binding_type"] = design_info.res_binding_type[token_to_res]
-        tokenized.tokens["structure_group"] = design_info.res_structure_groups[token_to_res]
+        tokenized.tokens["structure_group"] = design_info.res_structure_groups[
+            token_to_res
+        ]
 
         chain_design_mask = tokenized.tokens["design_mask"].astype(bool)
         asym_id = tokenized.tokens["asym_id"]
@@ -659,22 +664,35 @@ class Pipeline:
         *,
         molecules: Mapping[str, Mol] | None,
         mol_dir: str | Path | None,
-    ) -> dict[str, Mol]:
+    ) -> Mapping[str, Mol]:
         mol_dir_value = Path(mol_dir) if mol_dir is not None else self.mol_dir
-        molecules_map: dict[str, Mol] = {}
-        molecules_map.update(self.canonicals)
-        molecules_map.update(self.molecules)
-        if molecules is not None:
-            molecules_map.update(molecules)
+        layers: list[Mapping[str, Mol]] = []
         if target is not None and target.extra_mols:
-            molecules_map.update(target.extra_mols)
+            layers.append(target.extra_mols)
+        if molecules is not None:
+            layers.append(molecules)
+        if self.molecules:
+            layers.append(self.molecules)
+        if self.canonicals:
+            layers.append(self.canonicals)
+
+        if not layers:
+            molecules_map: Mapping[str, Mol] = {}
+        elif len(layers) == 1:
+            molecules_map = layers[0]
+        else:
+            molecules_map = ChainMap(*layers)
 
         missing = set(tokenized.tokens["res_name"].tolist()) - set(molecules_map.keys())
         if missing:
             if mol_dir_value is None:
                 raise ValueError(f"Missing molecules for residues: {sorted(missing)}.")
-            molecules_map.update(load_molecules(str(mol_dir_value), sorted(missing)))
-            missing = set(tokenized.tokens["res_name"].tolist()) - set(molecules_map.keys())
+            loaded = load_molecules(str(mol_dir_value), sorted(missing))
+            self.molecules.update(loaded)
+            molecules_map = loaded if not layers else ChainMap(loaded, *layers)
+            missing = set(tokenized.tokens["res_name"].tolist()) - set(
+                molecules_map.keys()
+            )
             if missing:
                 raise ValueError(f"Missing molecules for residues: {sorted(missing)}.")
         return molecules_map
@@ -693,7 +711,8 @@ class Pipeline:
         **kwargs: Any,
     ) -> Mapping[str, Any]:
         molecules_map = self._resolve_molecules(
-            tokenized or Tokenized(
+            tokenized
+            or Tokenized(
                 tokens=input_data.tokens,
                 bonds=input_data.bonds,
                 structure=input_data.structure,
@@ -752,7 +771,9 @@ class DesignSpec:
         base_dir: str | Path | None = None,
     ) -> None:
         self._model = model
-        base_path = Path(base_dir).expanduser().resolve() if base_dir is not None else None
+        base_path = (
+            Path(base_dir).expanduser().resolve() if base_dir is not None else None
+        )
         self._spec = Spec(name=name, base_dir=base_path)
 
     @property

@@ -7,6 +7,7 @@ import os
 import pickle
 import tempfile
 import warnings
+from collections import ChainMap
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -807,7 +808,7 @@ class Pipeline:
         *,
         components: Mapping[str, Mol] | None = None,
     ) -> Target:
-        ccd = dict(components or self.components)
+        ccd = self.components if components is None else dict(components)
         if not ccd and spec.requires_components():
             raise ValueError("components must include CCD molecules for parsing.")
 
@@ -931,9 +932,16 @@ class Pipeline:
             features["record"] = tokenized.record
             return features
 
-        molecules_map = dict(molecules or self.molecules)
-        if tokenized.extra_mols:
-            molecules_map.update(tokenized.extra_mols)
+        extra_mols = tokenized.extra_mols or None
+        if molecules is None:
+            if extra_mols:
+                molecules_map: Mapping[str, Mol] = ChainMap(extra_mols, self.molecules)
+            else:
+                molecules_map = self.molecules
+        elif extra_mols:
+            molecules_map = ChainMap(extra_mols, molecules)
+        else:
+            molecules_map = molecules
 
         missing = set(tokenized.tokens["res_name"].tolist()) - set(molecules_map.keys())
         if missing:
@@ -1229,6 +1237,12 @@ class FoldComplex:
         self._model = model
         self._spec = Spec(name)
         self._structure_prediction: StructurePrediction | None = None
+        self._prepared_trace: Trace | None = None
+        self._prepared_batch: dict[str, Any] | None = None
+        self._affinity_batches: dict[
+            tuple[str, bool, bool, str | None],
+            dict[str, Any],
+        ] = {}
         self._dirty = True
 
     @property
@@ -1251,7 +1265,7 @@ class FoldComplex:
             msa=msa,
             cyclic=cyclic,
         )
-        self._dirty = True
+        self._mark_dirty()
         return self
 
     def dna(
@@ -1263,7 +1277,7 @@ class FoldComplex:
         cyclic: bool = False,
     ) -> FoldComplex:
         self._spec.dna(ids, sequence, modifications=modifications, cyclic=cyclic)
-        self._dirty = True
+        self._mark_dirty()
         return self
 
     def rna(
@@ -1275,7 +1289,7 @@ class FoldComplex:
         cyclic: bool = False,
     ) -> FoldComplex:
         self._spec.rna(ids, sequence, modifications=modifications, cyclic=cyclic)
-        self._dirty = True
+        self._mark_dirty()
         return self
 
     def ligand(
@@ -1291,7 +1305,7 @@ class FoldComplex:
                 raise ValueError("Provide smiles_or_ccd or ccd/smiles, not both.")
             smiles = smiles_or_ccd
         self._spec.ligand(ids, ccd=ccd, smiles=smiles)
-        self._dirty = True
+        self._mark_dirty()
         return self
 
     def bond(
@@ -1300,7 +1314,7 @@ class FoldComplex:
         atom2: AtomRef | Sequence[str | int],
     ) -> FoldComplex:
         self._spec.bond(atom1, atom2)
-        self._dirty = True
+        self._mark_dirty()
         return self
 
     def pocket(
@@ -1317,7 +1331,7 @@ class FoldComplex:
             max_distance=max_distance,
             force=force,
         )
-        self._dirty = True
+        self._mark_dirty()
         return self
 
     def contact(
@@ -1334,17 +1348,102 @@ class FoldComplex:
             max_distance=max_distance,
             force=force,
         )
-        self._dirty = True
+        self._mark_dirty()
         return self
 
     def add_template(self, template: Template) -> FoldComplex:
         self._spec.add_template(template)
-        self._dirty = True
+        self._mark_dirty()
         return self
 
     def request_affinity(self, binder: str) -> FoldComplex:
         self._spec.request_affinity(binder)
+        self._clear_affinity_cache()
         return self
+
+    def _mark_dirty(self) -> None:
+        self._structure_prediction = None
+        self._prepared_trace = None
+        self._prepared_batch = None
+        self._clear_affinity_cache()
+        self._dirty = True
+
+    def _clear_affinity_cache(self) -> None:
+        self._affinity_batches.clear()
+
+    def _prepare_structure_inputs(self) -> tuple[Trace, dict[str, Any]]:
+        trace = self._prepared_trace
+        if trace is None or trace.features is None:
+            spec = self._spec
+            if spec.affinity is not None:
+                spec = replace(spec, affinity=None)
+            trace = self._model.pipeline.prepare(spec)
+            trace = self._model.pipeline.featurize(
+                trace,
+                random=np.random.default_rng(42),
+            )
+            self._prepared_trace = trace
+            self._prepared_batch = None
+
+        batch = self._prepared_batch
+        if batch is None:
+            if trace.features is None:
+                raise RuntimeError(
+                    "Structure feature preparation returned no features."
+                )
+            batch = _batchify(trace.features)
+            self._prepared_batch = batch
+        return trace, dict(batch)
+
+    def _prepare_affinity_inputs(
+        self,
+        binder: str,
+        *,
+        use_structure_prediction: bool,
+        crop_affinity: bool,
+        override_method: str | None,
+    ) -> dict[str, Any]:
+        cache_key = (
+            binder,
+            use_structure_prediction,
+            crop_affinity,
+            override_method,
+        )
+        batch = self._affinity_batches.get(cache_key)
+        if batch is not None:
+            return dict(batch)
+
+        if self._spec.affinity and self._spec.affinity.binder == binder:
+            affinity_spec = self._spec
+        else:
+            affinity_spec = replace(
+                self._spec,
+                affinity=Affinity(binder=binder),
+            )
+
+        structure_prediction = None
+        if use_structure_prediction:
+            structure_prediction = self._predict_structure()
+
+        target = self._model.pipeline.build_target(affinity_spec)
+        if structure_prediction is not None:
+            target = replace(target, structure=structure_prediction.structure)
+        input_data = self._model.pipeline.build_input(affinity_spec, target)
+        tokenized = self._model.pipeline.tokenize(input_data)
+        if crop_affinity:
+            tokenized = AffinityCropper().crop(
+                tokenized,
+                max_tokens=256,
+                max_atoms=2048,
+            )
+        features = self._model.pipeline.featurize(
+            tokenized,
+            override_method=override_method,
+            random=np.random.default_rng(42),
+        )
+        batch = _batchify(features)
+        self._affinity_batches[cache_key] = batch
+        return dict(batch)
 
     def fold(self, **predict_overrides: Any) -> StructurePrediction:
         """Run a structure prediction and return the in-memory structure."""
@@ -1383,36 +1482,12 @@ class FoldComplex:
                 )
                 raise ValueError(msg)
             affinity_binder = ligand_ids[0]
-
-        if self._spec.affinity and self._spec.affinity.binder == affinity_binder:
-            affinity_spec = self._spec
-        else:
-            affinity_spec = replace(
-                self._spec,
-                affinity=Affinity(binder=affinity_binder),
-            )
-
-        structure_prediction = None
-        if use_structure_prediction:
-            structure_prediction = self._predict_structure()
-
-        target = self._model.pipeline.build_target(affinity_spec)
-        if structure_prediction is not None:
-            target = replace(target, structure=structure_prediction.structure)
-        input_data = self._model.pipeline.build_input(affinity_spec, target)
-        tokenized = self._model.pipeline.tokenize(input_data)
-        if crop_affinity:
-            tokenized = AffinityCropper().crop(
-                tokenized,
-                max_tokens=256,
-                max_atoms=2048,
-            )
-        features = self._model.pipeline.featurize(
-            tokenized,
+        batch = self._prepare_affinity_inputs(
+            affinity_binder,
+            use_structure_prediction=use_structure_prediction,
+            crop_affinity=crop_affinity,
             override_method=override_method,
-            random=np.random.default_rng(42),
         )
-        batch = _batchify(features)
         batch = _move_batch_to_device(batch, self._model.device)
         args = self._model._resolve_predict_args(  # noqa: SLF001
             predict_overrides, affinity=True
@@ -1432,16 +1507,7 @@ class FoldComplex:
         ):
             return self._structure_prediction
 
-        spec = self._spec
-        if spec.affinity is not None:
-            spec = replace(spec, affinity=None)
-
-        trace = self._model.pipeline.prepare(spec)
-        trace = self._model.pipeline.featurize(
-            trace,
-            random=np.random.default_rng(42),
-        )
-        batch = _batchify(trace.features)
+        trace, batch = self._prepare_structure_inputs()
         batch = _move_batch_to_device(batch, self._model.device)
         args = self._model._resolve_predict_args(  # noqa: SLF001
             predict_overrides, affinity=False

@@ -9,6 +9,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 from types import TracebackType
 from typing import Any
 
@@ -78,6 +79,21 @@ _DEFAULT_ANTIBODY_LIGHT_FRAMEWORK = (
     "DIQMTQSPSSLSASVGDRVTITCRAS{l1}WYQQKPGKAPKLLIY{l2}"
     "ASSRATGIPDRFSGSGSGTDFTLTISRLEPEDFAVYYC{l3}FGGGTKVEIK"
 )
+_DEFAULT_MODEL_INSTANCES: dict[str, object] = {}
+_DEFAULT_MODEL_LOCK = Lock()
+
+
+def _shared_default_model(key: str, factory: Callable[[], object]) -> object:
+    model = _DEFAULT_MODEL_INSTANCES.get(key)
+    if model is not None:
+        return model
+
+    with _DEFAULT_MODEL_LOCK:
+        model = _DEFAULT_MODEL_INSTANCES.get(key)
+        if model is None:
+            model = factory()
+            _DEFAULT_MODEL_INSTANCES[key] = model
+    return model
 
 
 def antibody_framework_specs(
@@ -696,7 +712,9 @@ class Complex:
         context = _REFUA_ENV.get()
         if context is not None:
             return context.boltz
-        return Boltz2()
+        shared = _shared_default_model("boltz", Boltz2)
+        self._boltz = shared  # type: ignore[assignment]
+        return shared  # type: ignore[return-value]
 
     def _resolve_boltzgen_model(
         self,
@@ -709,7 +727,9 @@ class Complex:
         context = _REFUA_ENV.get()
         if context is not None:
             return context.boltzgen
-        return BoltzGen()
+        shared = _shared_default_model("boltzgen", BoltzGen)
+        self._boltzgen = shared  # type: ignore[assignment]
+        return shared  # type: ignore[return-value]
 
     def add(self, *entities: Entity) -> Complex:
         """Append entities to the complex."""
@@ -863,9 +883,9 @@ class Complex:
             ligand_admet: dict[str, Mapping[str, Any]] = {}
             for ligand, ids, _ in ligands:
                 ligand_id = ids[0]
-                props = _mol_properties_from_entity(ligand)
-                ligand_rdkit[ligand_id] = props.to_dict()
-                ligand_admet[ligand_id] = props.admet_profile()
+                rdkit_profile, admet_result = _ligand_analysis_from_entity(ligand)
+                ligand_rdkit[ligand_id] = rdkit_profile
+                ligand_admet[ligand_id] = admet_result
             self.ligand_rdkit = dict(ligand_rdkit)
             self.ligand_admet = dict(ligand_admet)
         self.last_affinity = affinity
@@ -1018,9 +1038,9 @@ class Complex:
             if ligands:
                 for ligand, ids, _ in ligands:
                     ligand_id = ids[0]
-                    props = _mol_properties_from_entity(ligand)
-                    ligand_rdkit[ligand_id] = props.to_dict()
-                    ligand_admet[ligand_id] = props.admet_profile()
+                    rdkit_profile, admet_result = _ligand_analysis_from_entity(ligand)
+                    ligand_rdkit[ligand_id] = rdkit_profile
+                    ligand_admet[ligand_id] = admet_result
                 self.ligand_rdkit = dict(ligand_rdkit)
                 self.ligand_admet = dict(ligand_admet)
             else:
@@ -1437,6 +1457,16 @@ def _mol_properties_from_entity(entity: Entity) -> MolProperties:
     if isinstance(entity, Mol):
         return MolProperties(entity, lazy=True)
     raise TypeError(f"Unsupported ligand entity: {type(entity)!r}")
+
+
+def _ligand_analysis_from_entity(
+    entity: Entity,
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    props = _mol_properties_from_entity(entity)
+    from refua.admet import admet_profile  # noqa: PLC0415
+
+    smiles = Chem.MolToSmiles(props.mol, canonical=True)
+    return props.to_dict(), admet_profile(smiles, copy_result=False)
 
 
 def _smiles_from_entity(entity: Entity) -> str:
